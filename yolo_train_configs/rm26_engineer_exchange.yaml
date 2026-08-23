@@ -1,0 +1,53 @@
+# RM26 Engineer pillar/exchange — YOLO-Pose nano 训练
+# 数据: datasets/RM26_engineer_exchange/dataset_finalversion/data_local.yaml
+# kpt_shape [12,3] — pillar 有效 5 点 (槽 0–4)，exchange 有效 7 点 (槽 5–11)
+#
+# 说明: Ultralytics 官方无 yolov10n-pose 权重；nano 级 pose 预训练用 yolo11n-pose.pt，
+#       运行时选 YOLO11（ArmorLabel 设置或 --runtime yolo11）。
+
+model: yolo11n-pose.pt
+data: /home/dreamchaser/Desktop/autolabel/armor-label/datasets/RM26_engineer_exchange/dataset_finalversion/data_local.yaml
+epochs: 100
+patience: 50
+batch: 16
+imgsz: 640
+device: '0'
+workers: 8
+optimizer: AdamW
+project: runs/train
+name: rm26_engineer_pose_n
+exist_ok: false
+pretrained: true
+amp: true
+cos_lr: false
+deterministic: true
+single_cls: false
+rect: false
+val: true
+plots: true
+resume: false
+verbose: true
+lr0: 0.01
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_bias_lr: 0.0
+close_mosaic: 10
+freeze: 0
+box: 7.5
+cls: 0.5
+dfl: 1.5
+pose: 12.0
+kobj: 1.0
+dropout: 0.0
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 0.0
+translate: 0.1
+scale: 0.5
+shear: 0.0
+fliplr: 0.5
+mosaic: 1.0
+mixup: 0.0

@@ -1,0 +1,150 @@
+{
+  "categories": {
+    "BG": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "B1": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "B2": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "B3": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "B4": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "BO": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "BB": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "RG": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "R1": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "R2": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "R3": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "R4": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "RO": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "RB": {
+      "kpt_count": 4,
+      "keypoints": [
+        "TL",
+        "TR",
+        "BL",
+        "BR"
+      ]
+    },
+    "RT": {
+      "kpt_count": 5,
+      "keypoints": [
+        "R_center",
+        "target_inner",
+        "bottom_side",
+        "outer_axis",
+        "top_side"
+      ]
+    },
+    "BT": {
+      "kpt_count": 5,
+      "keypoints": [
+        "R_center",
+        "target_inner",
+        "bottom_side",
+        "outer_axis",
+        "top_side"
+      ]
+    }
+  }
+}

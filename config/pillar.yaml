@@ -1,0 +1,18 @@
+# pillar 单类 5 点 — dataset_pillar_only/data.yaml 为训练用 data 配置
+
+path: /home/dreamchaser/Desktop/autolabel/armor-label/datasets/RM26_engineer_exchange/dataset_pillar_only
+train: images/train
+val: images/val
+
+kpt_shape: [5, 3]
+flip_idx: [1, 0, 3, 2, 4]
+
+names:
+  0: pillar
+
+kpt_names:
+  0: TL
+  1: TR
+  2: BL
+  3: BR
+  4: ring

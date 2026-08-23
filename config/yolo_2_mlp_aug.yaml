@@ -1,0 +1,18 @@
+# YOLO-Pose -> MLP ROI 提取时的轻度增强参数
+# 全部为 0 表示不做任何处理；后续可按效果微调做 augmentation。
+#
+# 用法:
+#   python yolo_2_mlp.py <数据集> --out <输出> --config config/yolo_2_mlp_aug.yaml
+#
+# 建议试探范围（二值化前生效）:
+#   contrast:  0.0 ~ 0.4
+#   clarity:   0.0 ~ 0.5
+#   brightness: -0.2 ~ 0.2
+
+augmentation:
+  # 对比度增量：0=原图；正值提高对比（数字更黑、底更白）
+  contrast: 0.0
+  # 清晰度/锐化增量：0=原图；正值轻微锐化边缘
+  clarity: 0.0
+  # 亮度增量：0=原图；正值变亮，负值变暗
+  brightness: 0.0

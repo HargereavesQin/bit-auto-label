@@ -1,0 +1,21 @@
+{
+  "classes": [
+    {"id": 0,  "name": "BG",  "l2_levels": {}},
+    {"id": 1,  "name": "B1",  "l2_levels": {}},
+    {"id": 2,  "name": "B2",  "l2_levels": {}},
+    {"id": 3,  "name": "B3",  "l2_levels": {}},
+    {"id": 4,  "name": "B4",  "l2_levels": {}},
+    {"id": 5,  "name": "BO",  "l2_levels": {"none": 0, "up": 1, "mid": 2, "down": 3}},
+    {"id": 6,  "name": "BB",  "l2_levels": {}},
+    {"id": 7,  "name": "RG",  "l2_levels": {}},
+    {"id": 8,  "name": "R1",  "l2_levels": {}},
+    {"id": 9,  "name": "R2",  "l2_levels": {}},
+    {"id": 10, "name": "R3",  "l2_levels": {}},
+    {"id": 11, "name": "R4",  "l2_levels": {}},
+    {"id": 12, "name": "RO",  "l2_levels": {"none": 0, "up": 1, "mid": 2, "down": 3}},
+    {"id": 13, "name": "RB",  "l2_levels": {}}
+  ],
+  "kpt_count": 5,
+  "kpt_names": ["TL", "TR", "BL", "BR", "L2_sublevel"],
+  "l2_levels_default": {"none": 0, "up": 1, "mid": 2, "down": 3}
+}

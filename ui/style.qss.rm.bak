@@ -1,0 +1,887 @@
+/* =========================================================
+   ArmorLabel — RM Armory Theme  (RM 竞技工程风)
+   ---------------------------------------------------------
+   Design tokens (these are comment-only — QSS does not
+   support CSS custom properties, but keep them in sync
+   if you change values anywhere in the file).
+
+   Colors
+     --bg-app:        #0A0A0B   main background
+     --bg-panel:      #161618   panel surface
+     --bg-elevated:   #1C1C1F   raised surface
+     --bg-input:      #0F0F11   input surface
+     --bg-hover:      #202023   hover state
+     --bg-active:     #2A2A2D   active/pressed state
+
+     --border-subtle: #1F1F22   hairline dividers
+     --border:        #2A2A2D   default border
+     --border-strong: #3A3A3F   emphasis border
+     --border-accent: #F0B429   red accent border
+
+     --text:          #E8E8EA   primary text
+     --text-muted:    #A8A8AC   secondary text
+     --text-faint:    #6E6E72   tertiary text
+     --text-disabled: #4A4A4D
+
+     --accent:        #F0B429   primary red
+     --accent-bright: #FFC94A
+     --accent-dim:    #B88819
+     --accent-glow:   rgba(240,180,41,0.18)
+
+     --danger:        #F0B429
+     --success:       #22C55E
+     --info:          #3B82F6
+
+   Typography
+     --font-mono:     JetBrains Mono, Fira Code, Cascadia Code, Consolas, monospace
+     --font-sans:     Inter, "PingFang SC", "Microsoft YaHei", "Source Han Sans CN", sans-serif
+     --fs-xs/sm/base/md/lg/xl/2xl: 10/11/12/13/14/16/20 px
+
+   Spacing (4-px scale)
+     --sp-1..6: 4 / 6 / 8 / 12 / 16 / 24
+
+   Radius
+     --r-sm 4 (badge, checkbox), --r-md 6 (input, button), --r-lg 8 (panel, dialog)
+
+   Rules
+     - Three radii only. No 11, 14.
+     - Two typefaces only. mono for numbers/status, sans for prose.
+     - Borders + soft bg change, not borders alone, for separation.
+     - Amber = primary, red = danger only, green = online/success only.
+   ========================================================= */
+
+
+/* =========================================================
+   1. Reset / globals
+   ========================================================= */
+* {
+    /* 让 QSS 不被 Qt 默认 focus 矩形污染 */
+    outline: 0;
+}
+
+QMainWindow,
+QWidget {
+    background-color: #0A0A0B;
+    color: #E8E8EA;
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", "Source Han Sans CN", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+
+QDialog {
+    background-color: #0A0A0B;
+}
+
+QLabel {
+    color: #E8E8EA;
+    background: transparent;
+}
+
+/* 数字 / 坐标 / 状态文本走等宽 */
+QLabel[role="mono"],
+QLabel[role="status"] {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    color: #A8A8AC;
+    letter-spacing: 0.3px;
+}
+
+QLabel[role="status_online"]  { color: #22C55E; }
+QLabel[role="status_warning"] { color: #F0B429; }
+QLabel[role="status_offline"] { color: #6E6E72; }
+QLabel[role="status_danger"]  { color: #F0B429; }
+
+/* 状态消息颜色 — 由 main._set_status() 设置 role */
+QLabel[role="msg"]           { color: #A8A8AC; }
+QLabel[role="msg_success"]   { color: #22C55E; font-weight: 600; }
+QLabel[role="msg_warning"]   { color: #F0B429; font-weight: 600; }
+QLabel[role="msg_error"]     { color: #F0B429; font-weight: 600; }
+QLabel[role="msg_active"]    { color: #F0B429; font-weight: 600; }
+
+
+/* =========================================================
+   2. Menus
+   ========================================================= */
+QMenuBar {
+    background-color: #0A0A0B;
+    color: #E8E8EA;
+    border-bottom: 1px solid #1F1F22;
+    padding: 2px 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 6px 12px;
+    border-radius: 4px;
+    margin: 2px 1px;
+}
+QMenuBar::item:selected {
+    background-color: #1C1C1F;
+    color: #F0B429;
+}
+QMenuBar::item:pressed {
+    background-color: #2A2A2D;
+}
+
+QMenu {
+    background-color: #161618;
+    color: #E8E8EA;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 7px 28px 7px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+QMenu::item:selected {
+    background-color: rgba(240, 180, 41, 0.12);
+    color: #F0B429;
+}
+QMenu::item:disabled {
+    color: #4A4A4D;
+}
+QMenu::separator {
+    height: 1px;
+    background: #2A2A2D;
+    margin: 4px 8px;
+}
+
+
+/* =========================================================
+   3. Toolbars (left side rail)
+   ========================================================= */
+QToolBar {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0    rgba(59, 130, 246, 0.04),
+        stop:0.5  #0F0F11,
+        stop:1    rgba(220, 38, 38, 0.04)
+    );
+    border: none;
+    border-right: 1px solid #1F1F22;
+    padding: 4px 6px;
+    spacing: 2px;
+}
+
+QToolBar::separator {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0    rgba(59, 130, 246, 0.6),
+        stop:0.5  rgba(120, 120, 130, 0.4),
+        stop:1    rgba(220, 38, 38, 0.6)
+    );
+    height: 1px;
+    margin: 6px 8px;
+}
+
+/* 工具按钮: 选中时蓝色左边条 + 蓝色 glow */
+QToolButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 8px 4px 6px 4px;
+    color: #9A9AA2;
+    font-size: 11px;
+    font-weight: 500;
+    min-width: 64px;
+    min-height: 56px;
+    max-width: 76px;
+    qproperty-toolButtonStyle: 3;   /* ToolButtonTextUnderIcon */
+}
+QToolButton:hover {
+    background-color: #1C1C1F;
+    color: #E8E8EA;
+    border-color: #2A2A2D;
+}
+QToolButton:checked {
+    background-color: #1C1C1F;
+    color: #3B82F6;
+    border: 1px solid #2A2A2D;
+    border-left: 3px solid #3B82F6;
+    padding-left: 1px;   /* 抵消左边条宽度 */
+    font-weight: 700;
+}
+QToolButton:checked:hover {
+    background-color: #202023;
+}
+QToolButton:disabled {
+    color: #4A4A4D;
+}
+
+/* 主 SAM 按钮 — 激活时显红色, 强对比 */
+QToolButton#samAction {
+    background-color: #1C1C1F;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    color: #9A9AA2;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 10px 4px;
+    margin-top: 4px;
+}
+QToolButton#samAction:checked {
+    background-color: #DC2626;
+    color: #FFFFFF;
+    border: 1px solid #EF4444;
+    border-left: 3px solid #EF4444;
+    font-weight: 700;
+}
+QToolButton#samAction:checked:hover {
+    background-color: #EF4444;
+}
+
+
+/* =========================================================
+   4. Form controls
+   ========================================================= */
+/* 输入框 (line edit, spin box, combo box) */
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox,
+QComboBox,
+QAbstractSpinBox {
+    background-color: #0F0F11;
+    color: #E8E8EA;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    selection-background-color: #F0B429;
+    selection-color: #0A0A0B;
+}
+QLineEdit:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover,
+QComboBox:hover {
+    border-color: #3A3A3F;
+}
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QComboBox:focus {
+    border-color: #F0B429;
+    background-color: #161618;
+}
+QLineEdit:disabled {
+    color: #4A4A4D;
+    background-color: #0A0A0B;
+}
+QLineEdit[role="search"] {
+    border-radius: 14px;
+    padding: 6px 14px;
+}
+
+/* mono 数字 input */
+QLineEdit[role="mono"],
+QSpinBox[role="mono"],
+QDoubleSpinBox[role="mono"] {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    letter-spacing: 0.3px;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+}
+QComboBox::down-arrow {
+    image: none;
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #A8A8AC;
+    margin-right: 8px;
+}
+QComboBox QAbstractItemView {
+    background-color: #161618;
+    color: #E8E8EA;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    padding: 4px;
+    selection-background-color: rgba(240, 180, 41, 0.15);
+    selection-color: #F0B429;
+    outline: 0;
+}
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    background-color: transparent;
+    border: none;
+    width: 18px;
+    subcontrol-origin: border;
+}
+QSpinBox::up-button:hover,
+QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background-color: #202023;
+}
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: none;
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #A8A8AC;
+    margin-bottom: 2px;
+}
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: none;
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #A8A8AC;
+    margin-top: 2px;
+}
+
+/* 文本编辑区 */
+QTextEdit,
+QPlainTextEdit {
+    background-color: #0F0F11;
+    color: #E8E8EA;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    padding: 8px;
+    selection-background-color: #F0B429;
+    selection-color: #0A0A0B;
+}
+
+/* 复选框 / 单选 */
+QCheckBox,
+QRadioButton {
+    color: #E8E8EA;
+    spacing: 8px;
+    font-size: 12px;
+}
+QCheckBox::indicator,
+QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    background-color: #0F0F11;
+    border: 1px solid #2A2A2D;
+    border-radius: 4px;
+}
+QRadioButton::indicator {
+    border-radius: 8px;
+}
+QCheckBox::indicator:hover,
+QRadioButton::indicator:hover {
+    border-color: #3A3A3F;
+}
+QCheckBox::indicator:checked,
+QRadioButton::indicator:checked {
+    background-color: #F0B429;
+    border-color: #F0B429;
+    image: none;
+}
+QCheckBox::indicator:disabled,
+QRadioButton::indicator:disabled {
+    background-color: #0A0A0B;
+    border-color: #1F1F22;
+}
+
+
+/* =========================================================
+   5. Buttons
+   ========================================================= */
+QPushButton {
+    background-color: #1C1C1F;
+    color: #E8E8EA;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 18px;
+}
+QPushButton:hover {
+    background-color: #202023;
+    border-color: #3A3A3F;
+}
+QPushButton:pressed {
+    background-color: #161618;
+}
+QPushButton:disabled {
+    color: #4A4A4D;
+    background-color: #0F0F11;
+    border-color: #1F1F22;
+}
+
+/* Primary — 琥珀主操作 */
+QPushButton[role="primary"] {
+    background-color: #F0B429;
+    color: #0A0A0B;
+    border: 1px solid #F0B429;
+    font-weight: 700;
+}
+QPushButton[role="primary"]:hover {
+    background-color: #FFC94A;
+    border-color: #FFC94A;
+}
+QPushButton[role="primary"]:pressed {
+    background-color: #B88819;
+    border-color: #B88819;
+}
+QPushButton[role="primary"]:disabled {
+    background-color: #3A2F0A;
+    color: #6E6E72;
+    border-color: #3A2F0A;
+}
+
+/* Danger — 红色警告 */
+QPushButton[role="danger"] {
+    background-color: #1C1C1F;
+    color: #F0B429;
+    border: 1px solid #F0B429;
+    font-weight: 600;
+}
+QPushButton[role="danger"]:hover {
+    background-color: #F0B429;
+    color: #FFFFFF;
+    border-color: #F0B429;
+}
+QPushButton[role="danger"]:pressed {
+    background-color: #B88819;
+    border-color: #B88819;
+}
+
+/* Ghost — 仅文字 */
+QPushButton[role="ghost"] {
+    background-color: transparent;
+    border: 1px solid transparent;
+    color: #A8A8AC;
+    font-weight: 500;
+}
+QPushButton[role="ghost"]:hover {
+    background-color: #1C1C1F;
+    color: #E8E8EA;
+    border-color: transparent;
+}
+
+/* Tag 按钮 — 选中态琥珀填充, 用于 Armor/Buff 模式选择 */
+QPushButton[role="tag"]:checked {
+    background-color: #F0B429;
+    color: #0A0A0B;
+    border-color: #F0B429;
+    font-weight: 700;
+}
+QPushButton[role="tag"]:checked:hover {
+    background-color: #FFC94A;
+    border-color: #FFC94A;
+}
+
+/* 小尺寸按钮 (滤镜栏之类) */
+QPushButton[size="sm"] {
+    padding: 3px 8px;
+    font-size: 11px;
+    min-height: 14px;
+}
+
+
+/* =========================================================
+   6. Lists (file list, class list, instance list)
+   ========================================================= */
+QListWidget {
+    background-color: #0F0F11;
+    color: #E8E8EA;
+    border: 1px solid #1F1F22;
+    border-radius: 6px;
+    padding: 2px;
+    outline: 0;
+    font-size: 12px;
+}
+
+QListWidget::item {
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: #C8C8CC;
+    border: none;
+    margin: 1px 0;
+}
+QListWidget::item:hover {
+    background-color: #1C1C1F;
+    color: #E8E8EA;
+}
+QListWidget::item:selected {
+    background-color: rgba(59, 130, 246, 0.12);
+    color: #3B82F6;
+    border-left: 3px solid #3B82F6;
+    padding-left: 7px;
+    font-weight: 700;
+}
+
+QListWidget QLineEdit {
+    background-color: #1C1C1F;
+    color: #E8E8EA;
+    border: 1px solid #F0B429;
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin: 0;
+    font-size: 12px;
+    min-height: 22px;
+}
+
+
+/* =========================================================
+   7. Group boxes (sections)
+   ========================================================= */
+QGroupBox {
+    background-color: #14141A;
+    border: 1px solid #1F1F22;
+    border-top: 2px solid #2A2A2D;
+    border-radius: 8px;
+    margin-top: 16px;
+    padding: 14px 10px 10px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #A8A8AC;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 8px;
+    background-color: #0A0A0B;
+    color: #F0B429;
+}
+QGroupBox::title:disabled {
+    color: #4A4A4D;
+}
+
+/* 按 accent 着色 (顶部 2px 条 + 标题色) */
+QGroupBox[accent="amber"] {
+    border-top-color: #F0B429;
+}
+QGroupBox[accent="amber"]  QGroupBox::title { color: #F0B429; }
+QGroupBox[accent="blue"] {
+    border-top-color: #3B82F6;
+}
+QGroupBox[accent="blue"]   QGroupBox::title { color: #3B82F6; }
+QGroupBox[accent="red"] {
+    border-top-color: #DC2626;
+}
+QGroupBox[accent="red"]    QGroupBox::title { color: #DC2626; }
+QGroupBox[accent="green"] {
+    border-top-color: #22C55E;
+}
+QGroupBox[accent="green"]  QGroupBox::title { color: #22C55E; }
+QGroupBox[accent="muted"] {
+    border-top-color: #3A3A45;
+}
+QGroupBox[accent="muted"]  QGroupBox::title { color: #A8A8AC; }
+
+
+/* =========================================================
+   8. Dock widgets (right panel)
+   ========================================================= */
+QDockWidget {
+    color: #E8E8EA;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    titlebar-close-icon: none;
+}
+QDockWidget::title {
+    background-color: #0A0A0B;
+    padding: 10px 12px;
+    border-bottom: 1px solid #1F1F22;
+    text-align: left;
+    color: #F0B429;
+    text-transform: uppercase;
+}
+
+
+/* =========================================================
+   9. Canvas (QGraphicsView)
+   ========================================================= */
+QGraphicsView {
+    background-color: #050506;
+    border: 1px solid #1F1F22;
+    border-radius: 8px;
+    margin: 8px;
+}
+/* Canvas 加一层较明显的对角线渐变, 跟状态条的斜线分割呼应
+   左上蓝调, 右下红调, 形成"左蓝右红"的整体视觉 */
+QGraphicsView[role="battlefield"] {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0    rgba(59, 130, 246, 0.10),
+        stop:0.3  rgba(59, 130, 246, 0.04),
+        stop:0.5  rgba(10, 10, 14, 0.00),
+        stop:0.7  rgba(220, 38, 38, 0.04),
+        stop:1    rgba(220, 38, 38, 0.10)
+    );
+}
+
+
+/* =========================================================
+   10. Status bar (bottom tactical HUD)
+   ========================================================= */
+QStatusBar {
+    /* 整条状态条从左蓝调过渡到右红调, 中间收 */
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0    rgba(59, 130, 246, 0.20),
+        stop:0.4  rgba(10, 10, 14, 0.0),
+        stop:0.5  #0A0A0B,
+        stop:0.6  rgba(10, 10, 14, 0.0),
+        stop:1    rgba(220, 38, 38, 0.20)
+    );
+    color: #A8A8AC;
+    border-top: 1px solid #1F1F22;
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    min-height: 28px;
+}
+QStatusBar QLabel {
+    color: #A8A8AC;
+    padding: 0 10px;
+    background: transparent;
+    border-right: 1px solid #1F1F22;
+}
+QStatusBar QLabel:last-child {
+    border-right: none;
+}
+/* 状态条左侧: mode 蓝方色, 偏冷静 */
+QStatusBar QLabel[role="mode"] {
+    color: #3B82F6;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+}
+/* 状态条右侧: coord 红方色, 等宽数字 */
+QStatusBar QLabel[role="coord"] {
+    color: #DC2626;
+    font-weight: 600;
+    min-width: 200px;
+    letter-spacing: 0.5px;
+}
+
+
+/* =========================================================
+   11. Tabs
+   ========================================================= */
+QTabWidget::pane {
+    background-color: #0F0F11;
+    border: 1px solid #1F1F22;
+    border-radius: 8px;
+    top: -1px;        /* 让 tabbar 和 pane 边框相接 */
+}
+QTabBar {
+    background: transparent;
+    qproperty-drawBase: 0;
+}
+QTabBar::tab {
+    background-color: transparent;
+    color: #A8A8AC;
+    padding: 8px 16px;
+    margin-right: 2px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 64px;
+}
+QTabBar::tab:hover {
+    background-color: #1C1C1F;
+    color: #E8E8EA;
+}
+QTabBar::tab:selected {
+    background-color: #0F0F11;
+    color: #3B82F6;
+    border-color: #1F1F22;
+    border-bottom: 3px solid #3B82F6;
+    padding-bottom: 6px;
+}
+
+
+/* =========================================================
+   12. Tables
+   ========================================================= */
+QTableWidget,
+QTableView {
+    background-color: #0F0F11;
+    alternate-background-color: #161618;
+    color: #E8E8EA;
+    gridline-color: #1F1F22;
+    border: 1px solid #1F1F22;
+    border-radius: 6px;
+    font-size: 12px;
+    selection-background-color: rgba(240, 180, 41, 0.15);
+    selection-color: #F0B429;
+}
+QHeaderView::section {
+    background-color: #0A0A0B;
+    color: #A8A8AC;
+    border: none;
+    border-bottom: 1px solid #1F1F22;
+    border-right: 1px solid #1F1F22;
+    padding: 7px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+QHeaderView::section:last {
+    border-right: none;
+}
+QTableWidget::item,
+QTableView::item {
+    padding: 6px 10px;
+    border-bottom: 1px solid #1F1F22;
+}
+
+
+/* =========================================================
+   13. Scrollbars
+   ========================================================= */
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 4px 2px 4px 0;
+}
+QScrollBar::handle:vertical {
+    background: #2A2A2D;
+    border-radius: 3px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #3A3A3F;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    background: none;
+    height: 0;
+}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 0 4px 2px 4px;
+}
+QScrollBar::handle:horizontal {
+    background: #2A2A2D;
+    border-radius: 3px;
+    min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #3A3A3F;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    background: none;
+    width: 0;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+
+/* =========================================================
+   14. Tool tips
+   ========================================================= */
+QToolTip {
+    background-color: #1C1C1F;
+    color: #E8E8EA;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+}
+
+
+/* =========================================================
+   15. Progress bar
+   ========================================================= */
+QProgressBar {
+    background-color: #0F0F11;
+    color: #E8E8EA;
+    border: 1px solid #2A2A2D;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 18px;
+}
+QProgressBar::chunk {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0   #3B82F6,
+        stop:1   #DC2626
+    );
+    border-radius: 5px;
+}
+
+
+/* =========================================================
+   16. Custom: section header label, status dot, badge
+   ========================================================= */
+/* Section header: 大写小字, 默认中性, accent 变体可选 */
+QLabel[role="section_header"] {
+    color: #A8A8AC;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 8px 0 4px 0;
+}
+QLabel[role="section_header"][accent="amber"] { color: #F0B429; }
+QLabel[role="section_header"][accent="blue"]  { color: #3B82F6; }
+QLabel[role="section_header"][accent="red"]   { color: #DC2626; }
+QLabel[role="section_header"][accent="green"] { color: #22C55E; }
+
+/* Mono 段落 (e.g. 提示词、坐标面板) */
+QLabel[role="hint"],
+QLabel[role="caption"] {
+    color: #6E6E72;
+    font-size: 11px;
+    padding: 2px 0;
+}
+
+/* Tactical tag/chip */
+QLabel[role="chip"] {
+    background-color: #1C1C1F;
+    color: #A8A8AC;
+    border: 1px solid #2A2A2D;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+    letter-spacing: 0.5px;
+}
+QLabel[role="chip"][accent="amber"] {
+    color: #F0B429;
+    border-color: #F0B429;
+    background-color: rgba(240, 180, 41, 0.08);
+}
+QLabel[role="chip"][accent="green"] {
+    color: #22C55E;
+    border-color: #22C55E;
+    background-color: rgba(34, 197, 94, 0.08);
+}
+QLabel[role="chip"][accent="amber"] {
+    color: #F0B429;
+    border-color: #F0B429;
+    background-color: rgba(240, 180, 41, 0.08);
+}

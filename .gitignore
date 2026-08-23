@@ -1,0 +1,93 @@
+# ========== IDE ==========
+.idea/
+.vscode/
+.trae/
+.cursor/
+
+# ========== Python ==========
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ========== 权重 / 模型 / 压缩包（勿提交） ==========
+*.pt
+*.pth
+*.onnx
+*.onnx.data
+*.engine
+*.safetensors
+*.bin
+*.partial
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.rar
+sam3.pt
+models/
+stored_weights/
+YOLOpt/
+yolotest/
+output_mlp/
+runs/
+buff_sam3_auto/weights/
+
+# ========== 数据 / 媒体 / 录包 ==========
+datasets/
+dataset_2026/
+origin_data/
+new_buff/
+new_drone/
+autolabel/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.webp
+*.mp4
+*.avi
+*.mkv
+*.ts
+*.bag
+saved_bag*/
+
+# README 演示视频例外
+!docs/assets/**
+
+# 本地离线安装包（torch cu128 wheel 高达 2.7GB，绝不能入库）
+.wheels/
+
+# 本地调试脚本（不上传）
+_debug_buff_pipeline.py
+
+# Python 构建产物
+*.egg-info/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+# 仅忽略本地 buff 数据目录（勿用 *buff*，会误伤 core/*buff*.py）
+new_buff/
+buff_data/
+
+# ========== 构建 / 日志 / 本地配置 ==========
+build/
+install/
+log/
+*.log
+scripts/env.local
+AGENTS.md
+
+# ========== 训练输出 / 临时 ==========
+yolov10n_armor-pose_*/
+yolo26*.pt
+mlp_conv.onnx
+config/mlp_fp32.onnx
+
+# ========== 嵌套大工程 / 非核心本地扩展（不随本仓库推送） ==========
+vision/
+ros2-framework/
+lora/
+1

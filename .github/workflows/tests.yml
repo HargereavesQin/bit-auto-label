@@ -1,0 +1,81 @@
+name: tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_OPENGL: software
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      # PySide6 / pytest-qt 在 Linux 上需要系统级 OpenGL/XCB 库，缺了会在收集阶段 INTERNALERROR（exit 3）
+      - name: Install Qt system libs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libglib2.0-0 \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            libxcb1 \
+            libx11-xcb1 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install CPU torch + torchvision
+        # 必须同 index 成对安装；只装 torch 时 ultralytics 会拉到不匹配的 torchvision → nms 算子报错
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install deps
+        # torch/torchvision 已由上一步装 CPU 版；勿再装完整 requirements（会拉 CUDA 轮子）
+        run: |
+          pip install numpy opencv-python-headless PySide6 Pillow PyYAML psutil ultralytics==8.4.21
+          pip install pytest pytest-qt pytest-benchmark hypothesis
+
+      - name: Smoke Qt offscreen
+        run: |
+          python -c "import os; print('QT_QPA_PLATFORM=', os.environ.get('QT_QPA_PLATFORM')); from PySide6.QtWidgets import QApplication; import sys; app=QApplication(sys.argv); print('qt_ok', app.platformName())"
+
+      - name: Run tests (no GPU / resource markers)
+        run: python -m pytest tests -m "not vram and not resource" -q --tb=short
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Audit direct dependencies
+        run: |
+          pip install pip-audit
+          pip-audit --no-deps -r requirements.txt || true
