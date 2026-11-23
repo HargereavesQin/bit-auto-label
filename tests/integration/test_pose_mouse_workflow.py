@@ -251,3 +251,136 @@ def test_moved_image_and_json_keep_pose_labels(qtbot, pose_window, tmp_path):
     window.scene.load_image(str(moved))
     window.load_annotations(str(moved))
     assert Exporter.extract_shapes(window.scene) == expected
+
+
+def test_hidden_panels_can_be_restored_from_view_menu(qtbot, pose_window):
+    window = pose_window
+    # 使用与 Qt 右键菜单相同的 action 隐藏，顶栏菜单仍可恢复。
+    window.toolBar.toggleViewAction().trigger()
+    assert window.toolBar.isHidden()
+    assert not window.actionShowToolbar.isChecked()
+    window.actionShowToolbar.trigger()
+    assert window.toolBar.isVisible()
+    assert window.actionShowToolbar.isChecked()
+    window.toolBar.hide()
+    window.dockRight.hide()
+    window.actionShowPanels.trigger()
+    assert window.toolBar.isVisible()
+    assert window.dockRight.isVisible()
+
+
+def test_export_menu_produces_yolo_pose_with_original_keypoint_order(
+        qtbot, pose_window, monkeypatch, tmp_path):
+    import yaml
+    from tools.main_dataset_tool import DatasetToolWindow, MODES
+
+    # 测试窗口不能写入用户日常使用的数据集工具配置。
+    monkeypatch.setattr(DatasetToolWindow, "_save_config", lambda self: None)
+    monkeypatch.setattr(DatasetToolWindow, "trigger_message", lambda *args: None)
+    window = pose_window
+    click_view(qtbot, window, (250, 200))
+    for point in [(110, 110), (390, 110), (390, 340), (110, 340)]:
+        click_view(qtbot, window, point)
+    source = Path(window.current_image_path)
+    original = source.with_suffix(".json").read_bytes()
+    window.exportActions["TO_YOLO_POSE"].trigger()
+    exporter = window.dataset_window
+    qtbot.addWidget(exporter)
+    assert window.exportButton.menu() is window.menuExport
+    assert MODES[exporter.mode_combo.currentIndex()][0] == "TO_YOLO_POSE"
+    assert Path(exporter.img_input.text()) == source.parent
+    assert Path(exporter.ann_input.text()) == source.parent
+    assert not exporter.force_rm14_chk.isChecked()
+    assert not exporter.out_input.text()
+    destination = tmp_path / "export"
+    exporter.out_input.setText(str(destination))
+    exporter.ratios = (1.0, 0.0, 0.0)
+    exporter.start_btn.click()
+    qtbot.waitUntil(lambda: exporter.start_btn.isEnabled(), timeout=10000)
+    assert exporter.worker.wait(1000)
+    assert exporter.status_lbl.text() == "完成"
+    row = (destination / "labels/train" / source.with_suffix(".txt").name).read_text().split()
+    assert len(row) == 17
+    assert row[0] == "0"
+    for i, point in enumerate(poses(window)[0].get_keypoints_data()):
+        assert list(map(float, row[5 + 3*i:8 + 3*i])) == pytest.approx(
+            [point[0] / 640, point[1] / 480, point[2]], abs=1e-6)
+    assert (destination / "classes.txt").read_text().splitlines() == ["armor_screen"]
+    config = json.loads((destination / "pose_classes.json").read_text(encoding="utf-8"))
+    assert config["categories"]["armor_screen"]["keypoints"] == ["TL", "TR", "BR", "BL"]
+    dataset_yaml = next(destination.glob("*.yaml"))
+    assert yaml.safe_load(dataset_yaml.read_text(encoding="utf-8"))["kpt_shape"] == [4, 3]
+    assert source.with_suffix(".json").read_bytes() == original
+
+
+def test_pose_prompt_visible_creates_pose_boxes_and_accepts_points(qtbot, pose_window, monkeypatch):
+    window = pose_window
+    window._set_mode(CanvasMode.RECT)
+    window._set_mode(CanvasMode.POSE)
+    window._on_pose_auto_mode_changed("armor")
+    assert window.samTextGroup.isVisible()
+    assert window.samPromptInput.isVisible() and window.samPromptInput.isEnabled()
+    assert window.dockLayout.indexOf(window.pose_panel) < window.dockLayout.indexOf(window.samTextGroup)
+    # 模拟模型输出，验证实际提示词信号、位姿实例和鼠标补点链路。
+    monkeypatch.setattr(window.sam_client, "model", object())
+    requested = []
+    monkeypatch.setattr(window.sam_client, "request_text_inference", requested.append)
+    window.samPromptInput.setText("number")
+    qtbot.keyClick(window.samPromptInput, Qt.Key_Return)
+    assert requested == ["number"]
+    results = [{"rect": [100, 100, 300, 250]}, {"rect": [420, 100, 180, 250]}]
+    window.sam_client.text_result_ready.emit(results, "number")
+    assert len(poses(window)) == 2
+    assert "number" not in window.class_list
+    assert all(shape.label == "armor_screen" and shape.kpt_count == 4 for shape in poses(window))
+    first = window.scene._pose_keypoint_target()
+    assert first.rect().getRect() == (100, 100, 300, 250)
+    for point in [(110, 110), (390, 110), (390, 340), (110, 340)]:
+        click_view(qtbot, window, point)
+    assert first.is_kpt_complete()
+    assert first.rect().getRect() == (100, 100, 300, 250)
+    second = next(shape for shape in poses(window) if shape is not first)
+    window.on_pose_instance_selected(second)
+    click_view(qtbot, window, (430, 110))
+    assert len(second.keypoint_items) == 1
+    saved = json.loads(Path(window.current_image_path).with_suffix(".json").read_text(encoding="utf-8"))
+    assert all(shape["shape_type"] == "pose" for shape in saved["shapes"])
+    assert all(shape["kpt_names"] == ["TL", "TR", "BR", "BL"] for shape in saved["shapes"])
+    # 图片特征已切换时，迟到的提示词结果不能增加实例。
+    window.samPromptBtn.click()
+    window._sam_load_token += 1
+    window.sam_client.text_result_ready.emit(results, "number")
+    assert len(poses(window)) == 2
+
+
+def test_delete_current_image_cancel_confirm_and_last_image(
+        qtbot, pose_window, monkeypatch, synthetic_image, tmp_path):
+    import main
+
+    window = pose_window
+    first = Path(window.current_image_path)
+    second = synthetic_image()
+    window._reload_after_fs_change(preferred_image=str(first))
+    click_view(qtbot, window, (250, 200))
+    annotation = first.with_suffix(".json")
+    saved = annotation.read_bytes()
+    monkeypatch.setattr(main.QMessageBox, "question", lambda *args: main.QMessageBox.No)
+    window.actionDeleteImage.trigger()
+    assert first.exists() and annotation.read_bytes() == saved
+    assert window.current_image_path == str(first)
+    monkeypatch.setattr(main.QMessageBox, "question", lambda *args: main.QMessageBox.Yes)
+    window.actionDeleteImage.trigger()
+    assert not first.exists() and not annotation.exists()
+    assert window.current_image_path == str(second)
+    assert window.listFiles.count() == 1
+    buckets = list((tmp_path / ".deleted_images").iterdir())
+    assert len(buckets) == 1
+    assert (buckets[0] / "files" / annotation.name).read_bytes() == saved
+    window.actionDeleteImage.trigger()
+    assert not second.exists()
+    assert window.current_image_path is None
+    assert window.scene.img_item is None
+    assert window.listFiles.count() == 0
+    assert not window.actionDeleteImage.isEnabled()
+    assert window._flush_annotation_changes()
+    assert not annotation.exists()
