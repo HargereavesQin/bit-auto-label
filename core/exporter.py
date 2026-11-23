@@ -61,6 +61,7 @@ class Exporter:
             elif shape_type in _POSE_LIKE_TYPES:
                 shape_dict["keypoints"] = s.get("keypoints", [])
                 shape_dict["kpt_names"] = s.get("kpt_names", [])
+                shape_dict["bbox_from_keypoints"] = s.get("bbox_from_keypoints", False)
 
             data["shapes"].append(shape_dict)
 

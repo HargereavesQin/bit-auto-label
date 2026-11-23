@@ -278,7 +278,7 @@ def ensure_default_specs():
 
     # ---- Pose ----
     def pose_to_dict(item):
-        if item.keypoint_items:
+        if item.bbox_from_keypoints and item.keypoint_items:
             item.update_bbox_from_keypoints()
         rect = item.rect()
         p1 = item.mapToScene(rect.topLeft())
@@ -291,31 +291,36 @@ def ensure_default_specs():
             "points": [[p1.x(), p1.y()], [p2.x(), p2.y()]],
             "keypoints": item.get_keypoints_data(),
             "kpt_names": item.get_kpt_names(),
+            "bbox_from_keypoints": item.bbox_from_keypoints,
         }
 
     def pose_from_dict(d, parent=None):
         p0, p1 = d["points"][0], d["points"][1]
         r = QRectF(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
         s = _pose_mod.PoseShape(r, d["label"])
+        s.bbox_from_keypoints = bool(d.get("bbox_from_keypoints", False))
         if d.get("type") == SHAPE_HIERARCHY:
             s.is_hierarchical = True
         if "keypoints" in d and "kpt_names" in d:
-            kpt_data = d["keypoints"]
-            kpt_names = d["kpt_names"]
-            filtered_kpts = []
-            filtered_names = []
-            for i, k in enumerate(kpt_data):
+            kpt_data = list(d["keypoints"])
+            kpt_names = list(d["kpt_names"])
+            # Only trailing placeholders can be removed without changing point
+            # identities. Preserve interior slots (e.g. missing TR before BR).
+            while kpt_data:
+                k = kpt_data[-1]
                 vis = k[2] if len(k) > 2 else 0
                 kx, ky = float(k[0]), float(k[1])
                 if vis == 0 and abs(kx) < 1e-6 and abs(ky) < 1e-6:
-                    continue
-                filtered_kpts.append(k)
-                filtered_names.append(
-                    kpt_names[i] if i < len(kpt_names) else f"kpt_{i}"
-                )
-            s.kpt_names = filtered_names
-            s._kpt_count = len(filtered_names)
-            for k in filtered_kpts:
+                    kpt_data.pop()
+                else:
+                    break
+            # The schema defines the required count, not how many points have
+            # already been placed. Otherwise an empty SAM bbox becomes 0/0
+            # (complete) after switching images or undoing an action.
+            kpt_names.extend(f"kpt_{i}" for i in range(len(kpt_names), len(kpt_data)))
+            s.kpt_names = kpt_names
+            s._kpt_count = len(kpt_names)
+            for k in kpt_data:
                 s.add_keypoint(QPointF(float(k[0]), float(k[1])))
                 if s.keypoint_items:
                     vis = k[2] if len(k) > 2 else 0

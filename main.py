@@ -815,7 +815,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             shape = spec.from_dict(shape_data) if spec else None
 
             if shape:
-                self.scene.addItem(shape)
+                self._add_shape_to_scene(shape, label)
                 if hasattr(shape, 'update_label_text'):
                     shape.update_label_text(label)
                 if hasattr(shape, 'update_label_position'):
@@ -1316,7 +1316,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.scene.pose_kpt_only = checked
         for item in self.scene.items():
             if isinstance(item, PoseShape) and not getattr(item, "is_temp", False):
-                item.set_bbox_visible(not checked)
+                item.set_bbox_visible(not (checked and item.bbox_from_keypoints))
         self._update_pose_help_text()
 
     def _on_pose_category_changed(self, category_name):
@@ -2552,6 +2552,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.scene.addItem(shape)
             print(f"[POSE]   → pose shape added: label={shape.label} kpt_count={shape.kpt_count}")
             self.push_state()
+            self.update_pose_instance_list()
+            self._update_pose_help_text()
             if (hasattr(self, 'rm_armor_auto') and self.rm_armor_auto.enabled
                     and self.pose_panel and self.pose_panel.get_auto_mode() == "armor"
                     and not self.scene.pose_kpt_only):
@@ -2645,37 +2647,37 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return
         cat = self.pose_config.get_category(self.pose_selected_label)
         kpt_count = cat["kpt_count"] if cat else 0
-        incomplete = None
-        for item in self.scene.items():
-            if isinstance(item, PoseShape) and not getattr(item, 'is_temp', False):
-                if not item.is_kpt_complete():
-                    incomplete = item
-                    break
+        incomplete = self.scene._pose_keypoint_target()
         sam_on = self.samSwitch.isChecked()
         rm_on = (self.pose_panel.rm_auto_btn.isChecked()
                  if self.pose_panel and self.pose_panel.get_auto_mode() == "armor" else False)
         buff_on = self.pose_panel.get_auto_mode() == "buff-merge" if self.pose_panel else False
         if incomplete:
             done = len(incomplete.keypoint_items)
+            kpt_count = incomplete.kpt_count
             if buff_on:
                 self.helpLabel.setText(
                     f"Buff-Merge [{self.pose_selected_label}] YOLO标注/SAM精修 ({done}/{kpt_count})"
                 )
             elif sam_on and rm_on:
                 self.helpLabel.setText(f"位姿SAM+半自动 [{self.pose_selected_label}] 点击bbox添加关键点 ({done}/{kpt_count})")
-            elif self._pose_kpt_only_enabled():
+            elif incomplete.bbox_from_keypoints:
                 self.helpLabel.setText(f"位姿仅标点 [{self.pose_selected_label}] 点击添加关键点 ({done}/{kpt_count})")
             else:
-                self.helpLabel.setText(f"位姿 [{self.pose_selected_label}] 点击添加关键点 ({done}/{kpt_count})，拖拽新建实例")
+                next_name = incomplete.kpt_names[done] if done < len(incomplete.kpt_names) else str(done + 1)
+                self.helpLabel.setText(f"[{incomplete.label}] 保留当前框，点击添加第 {done + 1} 点 {next_name} ({done}/{kpt_count})")
         else:
             if self._pose_kpt_only_enabled():
                 self._set_status(f"位姿仅标点 [{self.pose_selected_label}] 所有实例已完成，点击空白处新建", "msg_warning")
+            elif sam_on:
+                self._set_status(f"位姿 [{self.pose_selected_label}] 点击 SAM 预览确认新框，然后依次补点", "msg_warning")
             else:
                 self._set_status(f"位姿 [{self.pose_selected_label}] 所有实例已完成，拖拽新建实例", "msg_warning")
     def on_pose_instance_selected(self, shape):
         for item in self.scene.selectedItems():
             item.setSelected(False)
         shape.setSelected(True)
+        self._update_pose_help_text()
 
     def on_pose_instance_delete(self, shape):
         if shape in self.scene.items():
@@ -3018,6 +3020,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if label not in self.class_list:
             self.add_class_to_list(label)
             self.save_classes()
+        if isinstance(shape, PoseShape) and not getattr(shape, "is_hierarchical", False):
+            category = self.pose_config.get_category(label)
+            if category and shape.kpt_count < category["kpt_count"]:
+                # Older saves may have truncated the schema to the number of
+                # placed points. Recover missing slots without replacing the
+                # saved box or any existing point coordinates.
+                shape.set_kpt_names(category["keypoints"])
         self.scene.addItem(shape)
 
     def _load_json(self, json_path):

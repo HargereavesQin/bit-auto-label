@@ -122,7 +122,7 @@ class PosePanel(QWidget):
         self.kpt_only_btn.toggled.connect(self._on_kpt_only_toggled)
         manual_layout.addWidget(self.kpt_only_btn)
 
-        self.kpt_only_tip = QLabel("关闭：先拖拽 bbox，再点击添加关键点")
+        self.kpt_only_tip = QLabel("SAM 确认框后直接依次补点，原框保持不变，无需开启仅标点")
         self.kpt_only_tip.setProperty("role", "caption")
         self.kpt_only_tip.setWordWrap(True)
         manual_layout.addWidget(self.kpt_only_tip)
@@ -510,11 +510,11 @@ class PosePanel(QWidget):
     def _apply_kpt_only_ui(self, enabled: bool):
         self.kpt_only_btn.setText("仅标点: 开" if enabled else "仅标点: 关")
         if enabled:
-            self.kpt_only_tip.setText("开启：点击空白处直接标点，bbox 自动计算并隐藏")
+            self.kpt_only_tip.setText("新建时直接标点并自动算框；已有 SAM/手动画框可继续补点，原框保留")
             if "drag" in self._tip_desc_labels:
                 self._tip_desc_labels["drag"].setText("（仅标点模式下无需拖拽 bbox）")
         else:
-            self.kpt_only_tip.setText("关闭：先拖拽 bbox，再点击添加关键点")
+            self.kpt_only_tip.setText("SAM 确认框后直接依次补点，原框保持不变，无需开启仅标点")
             if "drag" in self._tip_desc_labels:
                 self._tip_desc_labels["drag"].setText("拖拽绘制 bbox（仅标点模式关闭时）")
 
