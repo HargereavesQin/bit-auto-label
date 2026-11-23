@@ -318,10 +318,6 @@ class Canvas(QGraphicsScene):
         # Corners just outside the predicted bbox still belong to this pose.
         if (self.mode == CanvasMode.POSE and event.button() == Qt.LeftButton
                 and self.is_inside_image(pt)):
-            for item in self.items(clamped_pt):
-                if isinstance(item, KeypointItem) or isinstance(item.parentItem(), KeypointItem):
-                    super().mousePressEvent(event)
-                    return
             clicked_pose = self._find_clicked_pose(clamped_pt)
             target = (clicked_pose if clicked_pose is not None and not clicked_pose.is_kpt_complete()
                       else self._pose_keypoint_target())
@@ -334,6 +330,13 @@ class Canvas(QGraphicsScene):
                 self._add_pose_keypoint(target, clamped_pt)
                 event.accept()
                 return
+            # While a pose is incomplete, even a click inside an existing
+            # marker/number places the next point. Only completed poses hand
+            # these clicks to Qt for dragging; nearby corners need no gap.
+            for item in self.items(clamped_pt):
+                if isinstance(item, KeypointItem) or isinstance(item.parentItem(), KeypointItem):
+                    super().mousePressEvent(event)
+                    return
 
 # ---------------- SAM 确认生成 ----------------
         sam_click_modes = [CanvasMode.RECT, CanvasMode.POLY, CanvasMode.RBOX]

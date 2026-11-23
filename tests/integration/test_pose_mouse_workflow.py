@@ -86,3 +86,46 @@ def test_right_click_keypoint_changes_visibility_without_deleting_pose(qtbot, po
     click_view(qtbot, window, (110, 110), Qt.RightButton)
     assert len(poses(window)) == 1
     assert poses(window)[0].keypoint_items[0].visibility == 0
+
+
+@pytest.mark.parametrize("scale", [0.5, 1.0, 3.0])
+@pytest.mark.parametrize("points", [
+    [(200, 200), (204, 200), (204, 204), (200, 204)],
+    [(200, 200), (212, 198), (220, 220), (200, 220)],
+], ids=["overlapping-markers", "number-label-overlap"])
+def test_nearby_corners_fill_next_slots_without_moving_previous_points(qtbot, pose_window, scale, points):
+    window = pose_window
+    click_view(qtbot, window, (250, 200))
+    window.view.resetTransform()
+    window.view.scale(scale, scale)
+    window.view.centerOn(210, 210)
+    expected = []
+    for index, point in enumerate(points):
+        # Mouse coordinates are integer viewport pixels; compare with the
+        # actual mapped click location, including at fractional zoom.
+        pixel = window.view.mapFromScene(QPointF(*point))
+        position = window.view.mapToScene(pixel)
+        expected.append([position.x(), position.y(), 2])
+        click_view(qtbot, window, point)
+        assert len(poses(window)) == 1
+        shape = poses(window)[0]
+        assert len(shape.keypoint_items) == index + 1
+        for actual, wanted in zip(shape.get_keypoints_data(), expected):
+            assert actual == pytest.approx(wanted)
+        assert shape.rect().getRect() == (100, 100, 300, 250)
+
+
+def test_completed_pose_still_allows_dragging_keypoints(qtbot, pose_window):
+    window = pose_window
+    click_view(qtbot, window, (250, 200))
+    for point in [(110, 110), (390, 110), (390, 340), (110, 340)]:
+        click_view(qtbot, window, point)
+    start = window.view.mapFromScene(QPointF(110, 110))
+    end = window.view.mapFromScene(QPointF(130, 130))
+    qtbot.mousePress(window.view.viewport(), Qt.LeftButton, pos=start)
+    qtbot.mouseMove(window.view.viewport(), end)
+    qtbot.mouseRelease(window.view.viewport(), Qt.LeftButton, pos=end)
+    shape = poses(window)[0]
+    assert len(shape.keypoint_items) == 4
+    assert shape.get_keypoints_data()[0][:2] == pytest.approx([130, 130], abs=2)
+    assert shape.rect().getRect() == (100, 100, 300, 250)
