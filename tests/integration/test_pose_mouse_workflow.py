@@ -1,6 +1,7 @@
 """Exercise SAM pose creation through the real view and main-window slots."""
 import gc
 import json
+from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QPointF, QSettings, Qt, QTimer
@@ -129,3 +130,124 @@ def test_completed_pose_still_allows_dragging_keypoints(qtbot, pose_window):
     assert len(shape.keypoint_items) == 4
     assert shape.get_keypoints_data()[0][:2] == pytest.approx([130, 130], abs=2)
     assert shape.rect().getRect() == (100, 100, 300, 250)
+
+
+def test_autosave_reports_path_and_each_added_point(qtbot, pose_window):
+    window = pose_window
+    click_view(qtbot, window, (250, 200))
+    target = Path(window.current_image_path).with_suffix(".json")
+    assert window.saveStatusLabel.toolTip() == str(target)
+    for count, point in enumerate([(110, 110), (115, 110)], 1):
+        click_view(qtbot, window, point)
+        saved = json.loads(target.read_text(encoding="utf-8"))
+        visible = [p for p in saved["shapes"][0]["keypoints"] if p[2] == 2]
+        assert len(visible) == count
+        assert "已保存" in window.saveStatusLabel.text()
+
+
+def test_failed_save_blocks_switch_and_close_then_ctrl_s_recovers(
+        qtbot, pose_window, monkeypatch, synthetic_image):
+    import main
+    from PySide6.QtGui import QCloseEvent
+    from core.exporter import Exporter
+
+    window = pose_window
+    click_view(qtbot, window, (250, 200))
+    target = Path(window.current_image_path).with_suffix(".json")
+    original = target.read_bytes()
+    saved_counts = dict(window._image_label_counts)
+    original_path = window.current_image_path
+    window.listFiles.blockSignals(True)
+    window.listFiles.addItems([original_path, str(synthetic_image())])
+    window.listFiles.setCurrentRow(0)
+    window.listFiles.blockSignals(False)
+    notices = []
+    monkeypatch.setattr(main, "DialogOver", lambda *args: notices.append(args))
+    save_json = Exporter.save_json
+
+    def fail(*args, **kwargs):
+        raise PermissionError("read only")
+
+    monkeypatch.setattr(Exporter, "save_json", fail)
+    click_view(qtbot, window, (110, 110))
+    assert window._annotation_save_failed
+    assert target.read_bytes() == original
+    assert window._image_label_counts == saved_counts
+    assert "未保存" in window.saveStatusLabel.text()
+    window.listFiles.setCurrentRow(1)
+    assert window.listFiles.currentRow() == 0
+    assert window.current_image_path == original_path
+    assert len(poses(window)[0].keypoint_items) == 1
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted()
+    qtbot.keyClick(window, Qt.Key_S, Qt.ControlModifier)
+    assert not any(args[-1] == "success" for args in notices)
+
+    monkeypatch.setattr(Exporter, "save_json", save_json)
+    qtbot.keyClick(window, Qt.Key_S, Qt.ControlModifier)
+    assert not window._annotation_save_failed
+    assert any(args[-1] == "success" for args in notices)
+    assert target.read_bytes() != original
+
+
+def test_close_flushes_changes_without_creating_untouched_negative(pose_window):
+    from PySide6.QtCore import QRectF
+
+    window = pose_window
+    target = Path(window.current_image_path).with_suffix(".json")
+    window._saved_annotation_state = window._annotation_state()
+    assert window._flush_annotation_changes()
+    assert not target.exists()
+    # Simulate a scene modification whose change notification was missed.
+    shape = PoseShape(QRectF(100, 100, 300, 250), "armor_screen", ["TL", "TR", "BR", "BL"])
+    window.scene.addItem(shape)
+    assert window.close()
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    assert saved["shapes"][0]["label"] == "armor_screen"
+
+
+def test_switch_directory_failure_preserves_current_dataset(qtbot, pose_window, monkeypatch, tmp_path):
+    import main
+    from core.exporter import Exporter
+
+    window = pose_window
+    click_view(qtbot, window, (250, 200))
+    old_dir, old_path = window.current_dir, window.current_image_path
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.setattr(main.QFileDialog, "getExistingDirectory", lambda *args: str(other))
+    monkeypatch.setattr(main, "DialogOver", lambda *args: None)
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise OSError("disk full")
+        patch.setattr(Exporter, "save_json", fail)
+        click_view(qtbot, window, (110, 110))
+        window.open_dir()
+        assert (window.current_dir, window.current_image_path) == (old_dir, old_path)
+        assert window._annotation_save_failed
+    assert window.auto_save_annotation()
+
+
+def test_moved_image_and_json_keep_pose_labels(qtbot, pose_window, tmp_path):
+    from core.dataset_layout import resolve_open_layout
+    from core.exporter import Exporter
+
+    window = pose_window
+    click_view(qtbot, window, (250, 200))
+    click_view(qtbot, window, (110, 110))
+    expected = Exporter.extract_shapes(window.scene)
+    source = Path(window.current_image_path)
+    destination = tmp_path / "moved"
+    destination.mkdir()
+    # Simulate reopening the same image from its new dataset location.
+    window.current_image_path = None
+    moved = source.rename(destination / source.name)
+    source.with_suffix(".json").rename(moved.with_suffix(".json"))
+    layout = resolve_open_layout(str(destination))
+    assert layout.annotation_map[str(moved)] == str(moved.with_suffix(".json"))
+    window.current_image_path = str(moved)
+    window.current_dir = str(destination)
+    window.scene.load_image(str(moved))
+    window.load_annotations(str(moved))
+    assert Exporter.extract_shapes(window.scene) == expected

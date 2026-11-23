@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from .shape_registry import spec_for_item, get as spec_get
 from .constants import SHAPE_POSE, SHAPE_HIERARCHY
+from .atomic_write import atomic_text_writer
 
 # Pose 与 Hierarchy 共用 keypoints/kpt_names 字段，统一判断
 _POSE_LIKE_TYPES = (SHAPE_POSE, SHAPE_HIERARCHY)
@@ -65,7 +66,7 @@ class Exporter:
 
             data["shapes"].append(shape_dict)
 
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with atomic_text_writer(filepath) as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     @staticmethod
@@ -92,7 +93,7 @@ class Exporter:
             if line:
                 lines.append(line)
 
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with atomic_text_writer(filepath) as f:
             f.write("\n".join(lines))
 
     @staticmethod
@@ -135,5 +136,5 @@ class Exporter:
                     ET.SubElement(kpt_node_elem, "visibility").text = str(int(kpt[2]) if len(kpt) > 2 else 2)
 
         xmlstr = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with atomic_text_writer(filepath) as f:
             f.write(xmlstr)

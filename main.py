@@ -27,6 +27,7 @@ from ui.main_window import Ui_MainWindow
 from core.canvas import Canvas, CanvasMode
 from core.sam_client import SAMClient
 from core.exporter import Exporter
+from core.atomic_write import atomic_text_writer
 from core.shapes import RectShape, PolyShape, PointShape, RotatedRectShape
 from core.pose_shapes import PoseShape
 from core.pose_config import PoseConfig
@@ -163,6 +164,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.view.setScene(self.scene)
 
         self.current_image_path = None
+        self._saved_annotation_state = None
+        self._annotation_save_failed = False
         self.current_dir = None
         self.class_list = []
         self.current_format = "json"
@@ -236,6 +239,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         self.helpLabel = QLabel("状态: 正在初始化")
         self.statusBar.addWidget(self.helpLabel)
+
+        self.saveStatusLabel = QLabel("自动保存：已开启")
+        self.statusBar.addPermanentWidget(self.saveStatusLabel)
 
         self.sam_client = SAMClient(self)
         self.sam_client.inference_result.connect(self.scene.handle_sam_result)
@@ -2381,7 +2387,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if not directory or not os.path.isdir(directory):
                 continue
             class_file = os.path.join(directory, "classes.txt")
-            with open(class_file, "w", encoding="utf-8") as file_handle:
+            with atomic_text_writer(class_file) as file_handle:
                 for class_name in self.class_list:
                     file_handle.write(class_name + "\n")
 
@@ -2765,7 +2771,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         dir_path = QFileDialog.getExistingDirectory(self, "选择图片目录")
         if not dir_path:
             return
+        if not self._flush_annotation_changes():
+            return
         layout = resolve_open_layout(dir_path)
+        self.current_image_path = None
         self.current_dir = dir_path
         self._dataset_layout = layout.layout
         self._images_dir = layout.images_dir
@@ -2819,7 +2828,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not directory or not self.class_list:
             return
         class_file = os.path.join(directory, "classes.txt")
-        with open(class_file, "w", encoding="utf-8") as file_handle:
+        with atomic_text_writer(class_file) as file_handle:
             for class_name in self.class_list:
                 file_handle.write(class_name + "\n")
 
@@ -2856,7 +2865,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def on_file_selected(self, current, previous):
         if previous:
-            self._save_annotation_for_path(previous.text())
+            if self._save_annotation_for_path(previous.text()) is False:
+                self.listFiles.blockSignals(True)
+                self.listFiles.setCurrentItem(previous)
+                self.listFiles.blockSignals(False)
+                self._sync_image_nav_slider()
+                return
 
         if current:
             # 切图时中断进行中的 LoRA / RM / Buff，避免旧图回调污染
@@ -2893,6 +2907,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
             self.load_annotations(path)
             self._load_current_mlp_label()
+            self._saved_annotation_state = self._annotation_state()
+            self._annotation_save_failed = False
+            annotation_path = self._anno_map.get(path)
+            self.saveStatusLabel.setText("自动保存：已读取标注" if annotation_path else "自动保存：等待修改")
+            self.saveStatusLabel.setToolTip(
+                annotation_path or self._yolo_label_targets.get(path) or sidecar_json_path(path)
+            )
 
             self.undo_stack.clear()
             self.redo_stack.clear()
@@ -2937,6 +2958,26 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 return ANNO_FORMAT_YOLO, yolo_path
         return ANNO_FORMAT_JSON, json_path
 
+    def _annotation_state(self):
+        # Serialize to a value snapshot: scene coordinates may change in-place.
+        return (self.current_image_path, json.dumps(
+            [Exporter.extract_shapes(self.scene), self._current_mlp_label],
+            ensure_ascii=False, sort_keys=True,
+        ))
+
+    def _flush_annotation_changes(self):
+        """Save remaining edits without marking untouched images as negatives."""
+        if not self.current_image_path or not self.scene.img_item:
+            return True
+        if not self._annotation_save_failed:
+            if self._annotation_state() == self._saved_annotation_state:
+                return True
+            if (self._saved_annotation_state is None
+                    and not Exporter.extract_shapes(self.scene)
+                    and self._current_mlp_label is None):
+                return True
+        return self._save_annotation_for_path(self.current_image_path)
+
     def _save_annotation_for_path(self, image_path):
         """将当前 scene 标注保存到指定图片路径（仅当 path 仍是当前图时落盘）。"""
         if not image_path or not self.scene.img_item:
@@ -2946,19 +2987,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         shapes_data = Exporter.extract_shapes(self.scene)
         img_rect = self.scene.img_item.pixmap().rect()
 
-        # 自动补全 class_list：确保新画的或自动标注出的 label (如 RT/BT) 包含在 self.class_list 中，
-        # 避免在 save_yolo 时因为 label 不在 self.class_list 中而被过滤掉导致 .txt 不写入
-        class_added = False
-        for s in shapes_data:
-            lbl = s.get("label", "").strip()
-            if lbl and lbl not in self.class_list:
-                self.add_class_to_list(lbl)
-                class_added = True
-        if class_added:
-            self.save_classes()
-
-        save_format, out_path = self._resolve_annotation_save_path(image_path)
+        out_path = image_path
         try:
+            # Include every scene label before exporting YOLO class IDs.
+            class_added = False
+            for s in shapes_data:
+                lbl = s.get("label", "").strip()
+                if lbl and lbl not in self.class_list:
+                    self.add_class_to_list(lbl)
+                    class_added = True
+            # Retry metadata writes too if a previous save failed.
+            if class_added or self._annotation_save_failed:
+                self.save_classes()
+            save_format, out_path = self._resolve_annotation_save_path(image_path)
             if save_format == ANNO_FORMAT_YOLO:
                 Exporter.save_yolo(
                     out_path, img_rect.width(), img_rect.height(),
@@ -2971,6 +3012,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 )
         except Exception as error:
             debug_log(f"自动保存失败: {str(error)}")
+            first_failure = not self._annotation_save_failed
+            self._annotation_save_failed = True
+            self.saveStatusLabel.setText("自动保存失败：未保存，请按 Ctrl+S 重试")
+            self.saveStatusLabel.setToolTip(f"{out_path}\n{error}")
+            if first_failure:
+                DialogOver(self, f"标注未保存：{error}。当前画面已保留，请检查目录后按 Ctrl+S 重试。",
+                           "自动保存失败", "danger")
+            return False
+
+        self._annotation_save_failed = False
+        self._saved_annotation_state = self._annotation_state()
+        self.saveStatusLabel.setText("自动保存：已保存")
+        self.saveStatusLabel.setToolTip(out_path)
 
         self._anno_map[image_path] = out_path
         self._anno_format[image_path] = save_format
@@ -2988,10 +3042,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self._update_filter_status()
         self._update_current_label_count()
 
+        return True
+
     def auto_save_annotation(self):
         if not self.current_image_path or not self.scene.img_item:
             return
-        self._save_annotation_for_path(self.current_image_path)
+        return self._save_annotation_for_path(self.current_image_path)
 
     def load_annotations(self, image_path):
         if not self.scene.img_item:
@@ -3580,12 +3636,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         elif key == Qt.Key_Y and modifiers == Qt.ControlModifier:
             self.redo()
         elif key == Qt.Key_S and modifiers == Qt.ControlModifier:
-            self.auto_save_annotation()
-            DialogOver(self, "标注已保存", "保存成功", "success")
+            if self.auto_save_annotation():
+                DialogOver(self, "标注已保存", "保存成功", "success")
         else:
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        if not self._flush_annotation_changes():
+            event.ignore()
+            return
         debug_log("关闭 正在清理资源...")
         # 等待后台 BUFF 标注线程结束，避免 QThread 运行中被析构导致 abort
         for worker_attr in ("_buff_sam3_worker", "_buff_semi_worker"):
