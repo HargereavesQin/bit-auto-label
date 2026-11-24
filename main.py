@@ -256,6 +256,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.redo_stack = []
         self._load_settings()
 
+        self._sam_prompt_save_timer = QTimer(self)
+        self._sam_prompt_save_timer.setSingleShot(True)
+        self._sam_prompt_save_timer.timeout.connect(self._save_sam_prompt)
+
         self._connect_signals()
         self._set_mode(CanvasMode.RECT)
         model_path = os.path.join(os.path.dirname(__file__), "models", "sam3.pt")
@@ -482,6 +486,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         self.samPromptBtn.clicked.connect(self.trigger_sam_prompt)
         self.samPromptInput.returnPressed.connect(self.trigger_sam_prompt)
+        self.samPromptInput.textChanged.connect(self._schedule_sam_prompt_save)
 
         self.listFiles.currentItemChanged.connect(self.on_file_selected)
         self.scene.mouse_moved.connect(self.update_coordinate_label)
@@ -3313,7 +3318,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _load_settings(self):
         from core.settings import get_rm_params, get_editor_params
+        from core.settings import Settings
         from core.constants import RM_VERTICAL_ANGLE_THRESHOLD, RM_PARALLEL_THRESHOLD, RM_BAR_LENGTH_MIN_RATIO, RM_SEARCH_RADIUS_RATIO, RM_ROI_PADDING
+        self._app_settings = Settings.app()
+        self.samPromptInput.setText(
+            self._app_settings.get_str("Parameters/SAM_PROMPT", "")
+        )
         self.max_history_steps = get_editor_params()["max_history"]
         rm = get_rm_params()
         RMArmorAuto.VERTICAL_ANGLE_THRESHOLD = rm["vertical_angle"]
@@ -3323,6 +3333,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         RMArmorAuto.ROI_PADDING = rm["roi_padding"]
         from core.mlp_classifier import MLPClassifier
         MLPClassifier.load_roi_params_from_settings()
+
+    def _schedule_sam_prompt_save(self, _text=None):
+        """Debounce prompt persistence while the user is typing."""
+        self._sam_prompt_save_timer.start(250)
+
+    def _save_sam_prompt(self):
+        self._app_settings.set("Parameters/SAM_PROMPT", self.samPromptInput.text())
+        self._app_settings.sync()
 
     def open_settings(self):
         from core.mlp_classifier import MLPClassifier
@@ -3830,6 +3848,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not self._flush_annotation_changes():
             event.ignore()
             return
+        self._sam_prompt_save_timer.stop()
+        self._save_sam_prompt()
         debug_log("关闭 正在清理资源...")
         # 等待后台 BUFF 标注线程结束，避免 QThread 运行中被析构导致 abort
         for worker_attr in ("_buff_sam3_worker", "_buff_semi_worker"):
