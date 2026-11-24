@@ -953,6 +953,7 @@ class DatasetWorker(QThread):
         non_rm_samples = {}
         hier_instance_count = 0
         buff_instance_count = 0
+        pose_keypoint_names = {}
         for _, l_path, l_type in valid_pairs:
             if l_type == 'json':
                 with open(l_path, 'r', encoding='utf-8') as f:
@@ -974,6 +975,13 @@ class DatasetWorker(QThread):
                         st = s.get('shape_type', 'polygon') if s.get('points') else 'unknown'
                         if st in ('pose', 'hierarchy_pose') and s.get('keypoints'):
                             max_kpt_count = max(max_kpt_count, len(s['keypoints']))
+                            names = s.get('kpt_names', [])
+                            if label and names and len(names) == len(s['keypoints']):
+                                previous_names = pose_keypoint_names.get(norm_label)
+                                if previous_names is not None and previous_names != names:
+                                    self.finish_signal.emit(False, f"类别 {norm_label} 的关键点顺序不一致，请统一后再导出")
+                                    return
+                                pose_keypoint_names[norm_label] = list(names)
             elif l_type == 'xml':
                 for obj in ET.parse(l_path).getroot().findall('object'):
                     if obj.find('name') is not None:
@@ -1109,10 +1117,16 @@ class DatasetWorker(QThread):
             armor_kpt_names = ["TL", "TR", "BL", "BR"]
             categories = {}
             for name in class_map.keys():
-                if name in ("RT", "BT"):
+                if name in pose_keypoint_names:
+                    names = pose_keypoint_names[name]
+                    categories[name] = {"kpt_count": len(names), "keypoints": names}
+                elif name in ("RT", "BT"):
                     categories[name] = {"kpt_count": 5, "keypoints": list(buff_kpt_names)}
-                else:
+                elif name in hier_set:
                     categories[name] = {"kpt_count": 4, "keypoints": list(armor_kpt_names)}
+                else:
+                    categories[name] = {"kpt_count": max_kpt_count,
+                                        "keypoints": [f"kpt_{i}" for i in range(max_kpt_count)]}
             pose_cfg = {"categories": categories}
             pose_path = os.path.join(self.out_dir, "pose_classes.json")
             with open(pose_path, "w", encoding="utf-8") as pf:

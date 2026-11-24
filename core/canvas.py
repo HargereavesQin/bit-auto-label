@@ -30,6 +30,10 @@ class Canvas(QGraphicsScene):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Qt owns the C++ items, but signal/QVariant handoffs can leave their
+        # Python subclasses without a strong owner. Keep accepted annotations
+        # alive until explicitly removed, including between mouse events.
+        self._annotation_items = {}
         self.mode = CanvasMode.RECT
         self.img_item = None
         self.sam_client = None
@@ -68,6 +72,19 @@ class Canvas(QGraphicsScene):
         self.v_line.hide()
         self.addItem(self.h_line)
         self.addItem(self.v_line)
+
+    def addItem(self, item):
+        super().addItem(item)
+        if isinstance(item, (RectShape, PolyShape, PointShape, RotatedRectShape, PoseShape)):
+            self._annotation_items[id(item)] = item
+
+    def removeItem(self, item):
+        super().removeItem(item)
+        self._annotation_items.pop(id(item), None)
+
+    def clear(self):
+        super().clear()
+        self._annotation_items.clear()
 
     def load_image(self, path):
         self.clear_shapes()
@@ -149,7 +166,8 @@ class Canvas(QGraphicsScene):
         sam_modes = [CanvasMode.RECT, CanvasMode.POLY, CanvasMode.RBOX]
         if self.mode == CanvasMode.POSE:
             sam_modes.append(CanvasMode.POSE)
-        if self.sam_enabled and self.is_inside_image(pt) and self.mode in sam_modes:
+        if (self.sam_enabled and self.is_inside_image(pt) and self.mode in sam_modes
+                and not (self.mode == CanvasMode.POSE and self._pose_keypoint_target() is not None)):
             if self.sam_client:
                 self.sam_client.request_inference(clamped_pt.x(), clamped_pt.y(), is_click=False)
             return
@@ -193,6 +211,10 @@ class Canvas(QGraphicsScene):
         if self.sam_hover_item:
             self.removeItem(self.sam_hover_item)
             self.sam_hover_item = None
+
+        # Ignore in-flight hover/click results while filling an existing pose.
+        if self.mode == CanvasMode.POSE and self._pose_keypoint_target() is not None:
+            return
 
         if not poly_pts or not rect_xywh:
             return
@@ -242,6 +264,9 @@ class Canvas(QGraphicsScene):
             if is_click:
                 shape = PoseShape(rect, label="")
                 self.shape_drawn.emit(shape)
+                if shape.scene() is self:
+                    self.clearSelection()
+                    shape.setSelected(True)
             else:
                 self.sam_hover_item = QGraphicsRectItem(rect)
                 self.sam_hover_item.setPen(QPen(QColor(220, 186, 128), 2, Qt.DashLine))
@@ -254,6 +279,13 @@ class Canvas(QGraphicsScene):
 
         # ---------------- 右键删除逻辑（优先于所有其他操作） ----------------
         if event.button() == Qt.RightButton:
+            # A keypoint/its number is part of the pose, so merely skipping it
+            # would hit the parent box next and delete the whole annotation.
+            for item in self.items(clamped_pt):
+                keypoint = item if isinstance(item, KeypointItem) else item.parentItem()
+                if isinstance(keypoint, KeypointItem):
+                    keypoint.mousePressEvent(event)
+                    return
             # 检查是否点击到了标注形状
             items = self.items(clamped_pt)
             clicked_shape = None
@@ -281,6 +313,30 @@ class Canvas(QGraphicsScene):
                 self.right_dragging = True
                 self.start_pt = clamped_pt
                 return
+
+        # Once a pose exists, clicks fill its point slots before invoking SAM.
+        # Corners just outside the predicted bbox still belong to this pose.
+        if (self.mode == CanvasMode.POSE and event.button() == Qt.LeftButton
+                and self.is_inside_image(pt)):
+            clicked_pose = self._find_clicked_pose(clamped_pt)
+            target = (clicked_pose if clicked_pose is not None and not clicked_pose.is_kpt_complete()
+                      else self._pose_keypoint_target())
+            if target is not None:
+                self.clearSelection()
+                target.setSelected(True)
+                if self.sam_hover_item:
+                    self.removeItem(self.sam_hover_item)
+                    self.sam_hover_item = None
+                self._add_pose_keypoint(target, clamped_pt)
+                event.accept()
+                return
+            # While a pose is incomplete, even a click inside an existing
+            # marker/number places the next point. Only completed poses hand
+            # these clicks to Qt for dragging; nearby corners need no gap.
+            for item in self.items(clamped_pt):
+                if isinstance(item, KeypointItem) or isinstance(item.parentItem(), KeypointItem):
+                    super().mousePressEvent(event)
+                    return
 
 # ---------------- SAM 确认生成 ----------------
         sam_click_modes = [CanvasMode.RECT, CanvasMode.POLY, CanvasMode.RBOX]
@@ -572,13 +628,22 @@ class Canvas(QGraphicsScene):
                     return item
         return None
 
+    def _pose_keypoint_target(self):
+        pending = [item for item in self.items()
+                   if isinstance(item, PoseShape) and not getattr(item, "is_temp", False)
+                   and item.kpt_count > 0 and not item.is_kpt_complete()]
+        selected = [item for item in pending if item.isSelected()]
+        if len(selected) == 1:
+            return selected[0]
+        return pending[0] if len(pending) == 1 else None
+
     def _add_pose_keypoint(self, pose_shape, scene_pt):
         if pose_shape.is_kpt_complete():
             return False
         pose_shape.add_keypoint(scene_pt)
-        if self.pose_kpt_only:
+        if pose_shape.bbox_from_keypoints:
             pose_shape.update_bbox_from_keypoints()
-            pose_shape.set_bbox_visible(False)
+            pose_shape.set_bbox_visible(not self.pose_kpt_only)
         # 层级标注：用户放完 4 个角点 (KP0-3) 后自动放置 KP4 (L2 子类, 虚拟点)
         if (self.hierarchical_active
                 and pose_shape.kpt_count >= 5
@@ -635,6 +700,7 @@ class Canvas(QGraphicsScene):
         """仅标点模式：点击空白处创建实例并放置第一个关键点。"""
         rect = QRectF(scene_pt.x() - 1, scene_pt.y() - 1, 2, 2)
         shape = PoseShape(rect, label="")
+        shape.bbox_from_keypoints = True
         self.shape_drawn.emit(shape)
         if shape.kpt_count > 0:
             shape.set_bbox_visible(False)

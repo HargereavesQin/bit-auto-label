@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QToolBar, QDockWidget, QListWidget, QGraphicsView,
     QLabel, QLineEdit, QPushButton, QStatusBar, QMenu,
     QListWidgetItem, QMenuBar,     QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QSizePolicy, QFrame, QSlider,
+    QSizePolicy, QFrame, QSlider, QToolButton,
 )
 from PySide6.QtCore import Qt, Signal, QRect, QSize, QPoint
 from PySide6.QtGui import (
@@ -231,11 +231,24 @@ class Ui_MainWindow(object):
         self._build_left_toolbar(MainWindow)
         self._build_right_dock(MainWindow)
         self._build_canvas_actions(MainWindow)
-        self._build_format_chip(MainWindow)
+        self._build_view_menu(MainWindow)
 
     # ---------------------------------------------------------
     def _build_menubar(self, MainWindow):
         self.menuBar = QMenuBar(MainWindow)
+
+        self.menuExport = self.menuBar.addMenu("导出")
+        self.exportActions = {}
+        for key, title in (
+            ("TO_YOLO_POSE", "YOLO-Pose（关键点）…"),
+            ("TO_YOLO_DET", "YOLO 检测框…"),
+            ("TO_YOLO_SEG", "YOLO 分割…"),
+            ("TO_YOLO_OBB", "YOLO 旋转框…"),
+            ("FROM_YOLO_JSON", "JSON（从 YOLO 转换）…"),
+        ):
+            self.exportActions[key] = self.menuExport.addAction(title)
+
+        self.menuView = self.menuBar.addMenu("视图")
 
         self.menuTools = QMenu("工具", self.menuBar)
 
@@ -365,15 +378,23 @@ class Ui_MainWindow(object):
         set_action_icon(self.actionOpen, Icons.FOLDER, size=24)
         self.actionOpen.setToolTip("打开图片目录  (Ctrl+O)")
         self.toolBar.addAction(self.actionOpen)
+        self.actionDeleteImage = QAction("删除图片", MainWindow)
+        set_action_icon(self.actionDeleteImage, Icons.TRASH, size=24)
+        self.actionDeleteImage.setShortcut("Ctrl+Shift+Delete")
+        self.actionDeleteImage.setToolTip("将当前图片及标注移至回收目录 (Ctrl+Shift+Delete)")
+        self.actionDeleteImage.setEnabled(False)
+        self.toolBar.addAction(self.actionDeleteImage)
+        self.menuTools.addSeparator()
+        self.menuTools.addAction(self.actionDeleteImage)
         self.toolBar.addSeparator()
 
-        # 格式 chip 占位
-        self.formatLabel = QLabel("JSON")
-        self.formatLabel.setProperty("role", "chip")
-        self.formatLabel.setProperty("accent", "amber")
-        self.formatLabel.setAlignment(Qt.AlignCenter)
-        self.formatLabel.setMinimumWidth(64)
-        self.toolBar.addWidget(self.formatLabel)
+        self.exportButton = QToolButton(MainWindow)
+        self.exportButton.setText("导出")
+        self.exportButton.setMinimumWidth(64)
+        self.exportButton.setPopupMode(QToolButton.InstantPopup)
+        self.exportButton.setMenu(self.menuExport)
+        self.exportButton.setToolTip("选择导出格式，设置输出目录后执行转换")
+        self.toolBar.addWidget(self.exportButton)
         self.toolBar.addSeparator()
 
         # ---- 标注模式分组小标题 ----
@@ -469,9 +490,19 @@ class Ui_MainWindow(object):
         self.toolBar.addWidget(ver)
 
     # ---------------------------------------------------------
-    def _build_format_chip(self, _MainWindow):
-        """No-op: format chip 已在 _build_left_toolbar 里创建."""
-        pass
+    def _build_view_menu(self, MainWindow):
+        self.actionShowToolbar = self.toolBar.toggleViewAction()
+        self.actionShowToolbar.setText("左侧工具栏")
+        self.menuView.addAction(self.actionShowToolbar)
+        self.actionShowAnnotations = self.dockRight.toggleViewAction()
+        self.actionShowAnnotations.setText("右侧标注管理")
+        self.menuView.addAction(self.actionShowAnnotations)
+        self.menuView.addSeparator()
+        self.actionShowPanels = QAction("显示全部面板", MainWindow)
+        self.actionShowPanels.setShortcut("Ctrl+Shift+R")
+        self.actionShowPanels.triggered.connect(self.toolBar.show)
+        self.actionShowPanels.triggered.connect(self.dockRight.show)
+        self.menuView.addAction(self.actionShowPanels)
 
     # ---------------------------------------------------------
     def _build_right_dock(self, MainWindow):
@@ -630,13 +661,12 @@ class Ui_MainWindow(object):
         self.listFiles.setVisible(False)
 
     def _build_sam_prompt_section(self):
-        self.dockLayout.addWidget(self._section_header("SAM  /  提示词提取", accent="amber"))
-
-        # 提示词输入与提交按钮装在 samTextGroup 容器里 (兼容 main.py 的 hide/show)
+        # 标题和输入框保持在同一容器，切换模式时整体显示。
         self.samTextGroup = QWidget()
         sam_text_layout = QVBoxLayout(self.samTextGroup)
         sam_text_layout.setContentsMargins(0, 6, 0, 0)
         sam_text_layout.setSpacing(6)
+        sam_text_layout.addWidget(self._section_header("SAM3  /  提示词提取", accent="amber"))
 
         # 提示词输入 + 提交按钮一行
         prompt_row = QHBoxLayout()

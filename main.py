@@ -16,7 +16,7 @@ from core.pose_annotation_sync import (
     describe_pose_config_changes,
 )
 
-from tools.main_dataset_tool import DatasetToolWindow
+from tools.main_dataset_tool import DatasetToolWindow, MODES as DATASET_EXPORT_MODES
 from tools.video_frame_extractor import VideoFrameExtractorWindow
 from tools.armor_data_extractor import ArmorExtractorWindow
 from tools.yolo_auto_annotate import YoloAutoWindow
@@ -27,6 +27,7 @@ from ui.main_window import Ui_MainWindow
 from core.canvas import Canvas, CanvasMode
 from core.sam_client import SAMClient
 from core.exporter import Exporter
+from core.atomic_write import atomic_text_writer
 from core.shapes import RectShape, PolyShape, PointShape, RotatedRectShape
 from core.pose_shapes import PoseShape
 from core.pose_config import PoseConfig
@@ -36,6 +37,7 @@ from core.lora_sam_client import LoraSamClient
 from core.lora_armor_auto import LoraArmorAuto
 from core.statistics import DatasetStatistics
 from core.cleaner import DatasetCleaner
+from core.image_trash import trash_image
 from core.constants import (
     ANNO_FORMAT_JSON,
     ANNO_FORMAT_YOLO,
@@ -163,9 +165,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.view.setScene(self.scene)
 
         self.current_image_path = None
+        self._saved_annotation_state = None
+        self._annotation_save_failed = False
         self.current_dir = None
         self.class_list = []
-        self.current_format = "json"
 
         # SAM 加载状态（防止加载中切换图片导致崩溃）
         self.sam_loading = False
@@ -217,6 +220,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self._filter_aspect_anomaly = False
         self._filter_aspect_thresh = 4.0
         self._async_bound_image_path = None  # Buff/RM/LoRA 异步结果绑定路径
+        self._pose_prompt_request = None
         self._buff_semi_pending_shape = None  # Buff 半自动: 等待五点解算的 PoseShape
         self._buff_semi_worker = None
 
@@ -237,6 +241,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.helpLabel = QLabel("状态: 正在初始化")
         self.statusBar.addWidget(self.helpLabel)
 
+        self.saveStatusLabel = QLabel("自动保存：已开启")
+        self.statusBar.addPermanentWidget(self.saveStatusLabel)
+
         self.sam_client = SAMClient(self)
         self.sam_client.inference_result.connect(self.scene.handle_sam_result)
         self.sam_client.text_result_ready.connect(self.handle_text_results)
@@ -248,6 +255,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.undo_stack = []
         self.redo_stack = []
         self._load_settings()
+
+        self._sam_prompt_save_timer = QTimer(self)
+        self._sam_prompt_save_timer.setSingleShot(True)
+        self._sam_prompt_save_timer.timeout.connect(self._save_sam_prompt)
 
         self._connect_signals()
         self._set_mode(CanvasMode.RECT)
@@ -440,6 +451,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _connect_signals(self):
         self.actionOpen.triggered.connect(self.open_dir)
+        self.actionDeleteImage.triggered.connect(self.delete_current_image)
+        for mode_key, action in self.exportActions.items():
+            action.triggered.connect(
+                lambda checked=False, key=mode_key: self.open_annotation_export(key)
+            )
 
         self.actionSettings.triggered.connect(self.open_settings)
 
@@ -470,6 +486,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         self.samPromptBtn.clicked.connect(self.trigger_sam_prompt)
         self.samPromptInput.returnPressed.connect(self.trigger_sam_prompt)
+        self.samPromptInput.textChanged.connect(self._schedule_sam_prompt_save)
 
         self.listFiles.currentItemChanged.connect(self.on_file_selected)
         self.scene.mouse_moved.connect(self.update_coordinate_label)
@@ -815,7 +832,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             shape = spec.from_dict(shape_data) if spec else None
 
             if shape:
-                self.scene.addItem(shape)
+                self._add_shape_to_scene(shape, label)
                 if hasattr(shape, 'update_label_text'):
                     shape.update_label_text(label)
                 if hasattr(shape, 'update_label_position'):
@@ -842,6 +859,38 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def open_dataset_tool(self):
         self._open_tool_window("dataset_window", DatasetToolWindow)
+
+    def open_annotation_export(self, mode_key):
+        """带入当前图片目录和所选格式，复用数据集转换流程。"""
+        if not self.current_image_path:
+            DialogOver(self, "请先打开需要导出的图片目录", "导出标注", "warning")
+            return
+        window = getattr(self, "dataset_window", None)
+        worker = getattr(window, "worker", None)
+        if worker is not None and worker.isRunning():
+            self.open_dataset_tool()
+            DialogOver(self, "数据集转换正在运行，请等待完成后再选择导出格式", "导出标注", "warning")
+            return
+        if not self._flush_annotation_changes():
+            return
+        self.open_dataset_tool()
+        window = getattr(self, "dataset_window", None)
+        if window is None:
+            return
+        mode_index = next(i for i, mode in enumerate(DATASET_EXPORT_MODES) if mode[0] == mode_key)
+        window.mode_combo.setCurrentIndex(mode_index)
+        image_dir = os.path.dirname(self.current_image_path)
+        window.img_input.setText(image_dir)
+        annotation_path = self._anno_map.get(self.current_image_path)
+        annotation_dir = (os.path.dirname(annotation_path)
+                          if mode_key == "FROM_YOLO_JSON" and annotation_path
+                          and self._anno_format.get(self.current_image_path) == ANNO_FORMAT_YOLO
+                          else image_dir)
+        window.ann_input.setText(annotation_dir)
+        # 每次明确选择输出位置，避免沿用其他数据集的转换目标。
+        window.out_input.clear()
+        window.force_rm14_chk.setChecked(False)
+        window.out_input.setFocus()
 
     def open_video_extractor(self):
         self._open_tool_window("_video_extractor_window", VideoFrameExtractorWindow)
@@ -925,11 +974,44 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not prompt:
             return
 
+        if self.scene.mode == CanvasMode.POSE:
+            if (not self.current_image_path or not self.scene.img_item
+                    or self.sam_loading or not self.sam_client.model):
+                DialogOver(self, "请打开图片并等待 SAM3 加载完成", "提示词提取", "warning")
+                return
+            if self.rm_armor_auto._phase != "idle":
+                DialogOver(self, "自动标注正在运行，请完成后再提交提示词", "提示词提取", "warning")
+                return
+            if self.hier_mode_active and self.hier_selected_label and self.hier_config:
+                label = self.hier_selected_label
+                count, names = self.hier_config.get_kpt_spec_for_class(label)
+            else:
+                label = self.pose_selected_label
+                category = self.pose_config.get_category(label) if label else None
+                if not category:
+                    DialogOver(self, "请先选择位姿类别", "提示词提取", "warning")
+                    return
+                count, names = category["kpt_count"], category["keypoints"]
+            self._pose_prompt_request = {
+                "prompt": prompt, "image": self.current_image_path,
+                "token": self._sam_load_token, "label": label,
+                "count": count, "names": list(names), "hierarchical": self.hier_mode_active,
+            }
+
         self.samSwitch.setChecked(True)
         self._set_status(f"正在提取提示词: {prompt}...", "msg_warning")
         self.sam_client.request_text_inference(prompt)
 
     def handle_text_results(self, results, prompt_text):
+        request = self._pose_prompt_request
+        if request and request["prompt"] == prompt_text:
+            self._pose_prompt_request = None
+            if (self.scene.mode != CanvasMode.POSE
+                    or request["image"] != self.current_image_path
+                    or request["token"] != self._sam_load_token):
+                return
+            self._handle_pose_prompt_results(results, request)
+            return
         buff_active = (
             hasattr(self, 'rm_buff_merge_auto')
             and self.rm_buff_merge_auto.phase != "idle"
@@ -960,6 +1042,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.helpLabel.style().unpolish(self.helpLabel); self.helpLabel.style().polish(self.helpLabel); self.helpLabel.update()
             return
 
+        # 位姿文本结果只由提交时记录的类别与关键点定义创建。
+        if self.scene.mode == CanvasMode.POSE:
+            return
+
         self.helpLabel.setText(f"提取完成: 成功抓取 {len(results)} 个 '{prompt_text}' 目标")
         self.helpLabel.setProperty("role", "msg_success"); \
         self.helpLabel.style().unpolish(self.helpLabel); self.helpLabel.style().polish(self.helpLabel); self.helpLabel.update()
@@ -987,6 +1073,28 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.auto_save_annotation()
         self.push_state()
         self.update_all_instances()
+
+    def _handle_pose_prompt_results(self, results, request):
+        shapes = []
+        for result in results:
+            x, y, width, height = result["rect"]
+            shape = PoseShape(QRectF(x, y, width, height), request["label"], list(request["names"]))
+            shape.kpt_count = request["count"]
+            shape.is_hierarchical = request["hierarchical"]
+            self.scene.addItem(shape)
+            shapes.append(shape)
+        if not shapes:
+            self._set_status(f"提取完成: 未发现关于 '{request['prompt']}' 的目标", "msg_warning")
+            return
+        self.scene.clearSelection()
+        shapes[0].setSelected(True)
+        self.auto_save_annotation()
+        self.push_state()
+        self.update_all_instances()
+        self._set_status(
+            f"已生成 {len(shapes)} 个 {request['label']} 位姿框；选中实例后依次补关键点",
+            "msg_success",
+        )
 
     def _on_rect_light_fit_toggled(self, checked):
         self._rect_light_fit_active = checked
@@ -1180,7 +1288,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.samSwitch.setEnabled(True)
             self.samPromptInput.setEnabled(True)
             self.samPromptBtn.setEnabled(True)
-            self.samPromptInput.setPlaceholderText("输入提示词提取 (如: dog)")
+            if mode == CanvasMode.POSE:
+                buff = self.pose_panel and self.pose_panel.get_auto_mode() == "buff-merge"
+                self.samPromptInput.setPlaceholderText(
+                    "red_target / blue_target" if buff else "输入提示词生成位姿框，如: number"
+                )
+            else:
+                self.samPromptInput.setPlaceholderText("输入提示词提取 (如: dog)")
 
     def _enter_pose_mode(self):
         """进入位姿标注模式"""
@@ -1259,7 +1373,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if default_buff_weight:
                 self.pose_panel.set_buff_weight_path(default_buff_weight)
             # 将位姿面板添加到右侧 dock 中（替换普通类别列表区域）
-            self.dockLayout.addWidget(self.pose_panel, 1)
+            self.dockLayout.insertWidget(self.dockLayout.indexOf(self.samTextGroup), self.pose_panel, 1)
             self.pose_panel.show()
         else:
             self.pose_panel.refresh()
@@ -1270,7 +1384,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.pose_panel.get_auto_mode() == "buff-merge":
             self._on_pose_auto_mode_changed("buff-merge")
 
-        # 隐藏普通类别列表、实例列表和 SAM 区域（类别改由位姿/层级面板管理）
+        # 类别和实例改由位姿面板管理，提示词区域继续保留。
         self.listClasses.hide()
         self.labelClasses.hide()
         self.btnAddClass.hide()
@@ -1278,10 +1392,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.labelInstances.hide()
         self.instanceListWidget.hide()
         self.labelProgress.hide()
-        if self.pose_panel and self.pose_panel.get_auto_mode() == "buff-merge":
-            self.samTextGroup.show()
-        else:
-            self.samTextGroup.hide()
+        self.samTextGroup.show()
 
         # 从面板获取当前选中的类别; 若无选中则自动选第一个 (避免 pose_selected_label=None 导致无法标注)
         self.pose_selected_label = self.pose_panel.get_current_category()
@@ -1316,7 +1427,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.scene.pose_kpt_only = checked
         for item in self.scene.items():
             if isinstance(item, PoseShape) and not getattr(item, "is_temp", False):
-                item.set_bbox_visible(not checked)
+                item.set_bbox_visible(not (checked and item.bbox_from_keypoints))
         self._update_pose_help_text()
 
     def _on_pose_category_changed(self, category_name):
@@ -1525,7 +1636,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                                 if idx >= 0 and cid < len(self.class_list) and self.class_list[cid] == category_name and is_pose_line:
                                     removed_count += 1
                                 else:
-                                    if idx >= 0 and cid > idx and not is_pose_line:
+                                    # class_id is shared by box and pose rows, so
+                                    # removing a class must shift both formats.
+                                    if idx >= 0 and cid > idx:
                                         cid -= 1
                                     if is_pose_line:
                                         new_lines.append(f"{cid} " + " ".join(parts[1:]) + "\n")
@@ -1542,9 +1655,28 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.scene.removeItem(shape)
 
         # 从配置中移除
+        # Remove it from the class list as well. Otherwise load_classes() reads
+        # it back from classes.txt on the next launch and pose synchronization
+        # recreates the deleted category in pose_classes.json.
+        class_idx = self.class_list.index(category_name) if category_name in self.class_list else -1
+        if class_idx >= 0:
+            self.class_list.pop(class_idx)
+            self.save_classes()
+            self.refresh_class_list_display()
+
         self.pose_config.remove_category(category_name)
         pose_config_path = os.path.join(os.path.dirname(__file__), "config", "pose_classes.json")
         self.pose_config.save(pose_config_path)
+        # Persist the reduced category set to the dataset configuration now.
+        self._sync_pose_config_to_class_list()
+        dataset_roots = []
+        if getattr(self, "_dataset_root", None):
+            dataset_roots.append(self._dataset_root)
+        if self.current_dir and self.current_dir not in dataset_roots:
+            dataset_roots.append(self.current_dir)
+        for root in dataset_roots:
+            if root and os.path.isdir(root):
+                self.pose_config.save(os.path.join(root, "pose_classes.json"))
 
         # 刷新面板
         if self.pose_panel:
@@ -1601,8 +1733,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     self.rm_buff_merge_auto.load_yolo_async(weight)
         else:
             self.rm_buff_merge_auto.set_enabled(False)
-            self.samTextGroup.hide()
-            self.samPromptInput.setPlaceholderText("输入提示词提取 (如: dog)")
+            self.samTextGroup.show()
+            self.samPromptInput.setPlaceholderText("输入提示词生成位姿框，如: number")
             rm_on = self.pose_panel.rm_auto_btn.isChecked() if self.pose_panel else False
             self.rm_armor_auto.set_enabled(rm_on)
             self._update_pose_help_text()
@@ -2381,7 +2513,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if not directory or not os.path.isdir(directory):
                 continue
             class_file = os.path.join(directory, "classes.txt")
-            with open(class_file, "w", encoding="utf-8") as file_handle:
+            with atomic_text_writer(class_file) as file_handle:
                 for class_name in self.class_list:
                     file_handle.write(class_name + "\n")
 
@@ -2552,6 +2684,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.scene.addItem(shape)
             print(f"[POSE]   → pose shape added: label={shape.label} kpt_count={shape.kpt_count}")
             self.push_state()
+            self.update_pose_instance_list()
+            self._update_pose_help_text()
             if (hasattr(self, 'rm_armor_auto') and self.rm_armor_auto.enabled
                     and self.pose_panel and self.pose_panel.get_auto_mode() == "armor"
                     and not self.scene.pose_kpt_only):
@@ -2645,37 +2779,37 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return
         cat = self.pose_config.get_category(self.pose_selected_label)
         kpt_count = cat["kpt_count"] if cat else 0
-        incomplete = None
-        for item in self.scene.items():
-            if isinstance(item, PoseShape) and not getattr(item, 'is_temp', False):
-                if not item.is_kpt_complete():
-                    incomplete = item
-                    break
+        incomplete = self.scene._pose_keypoint_target()
         sam_on = self.samSwitch.isChecked()
         rm_on = (self.pose_panel.rm_auto_btn.isChecked()
                  if self.pose_panel and self.pose_panel.get_auto_mode() == "armor" else False)
         buff_on = self.pose_panel.get_auto_mode() == "buff-merge" if self.pose_panel else False
         if incomplete:
             done = len(incomplete.keypoint_items)
+            kpt_count = incomplete.kpt_count
             if buff_on:
                 self.helpLabel.setText(
                     f"Buff-Merge [{self.pose_selected_label}] YOLO标注/SAM精修 ({done}/{kpt_count})"
                 )
             elif sam_on and rm_on:
                 self.helpLabel.setText(f"位姿SAM+半自动 [{self.pose_selected_label}] 点击bbox添加关键点 ({done}/{kpt_count})")
-            elif self._pose_kpt_only_enabled():
+            elif incomplete.bbox_from_keypoints:
                 self.helpLabel.setText(f"位姿仅标点 [{self.pose_selected_label}] 点击添加关键点 ({done}/{kpt_count})")
             else:
-                self.helpLabel.setText(f"位姿 [{self.pose_selected_label}] 点击添加关键点 ({done}/{kpt_count})，拖拽新建实例")
+                next_name = incomplete.kpt_names[done] if done < len(incomplete.kpt_names) else str(done + 1)
+                self.helpLabel.setText(f"[{incomplete.label}] 保留当前框，点击添加第 {done + 1} 点 {next_name} ({done}/{kpt_count})")
         else:
             if self._pose_kpt_only_enabled():
                 self._set_status(f"位姿仅标点 [{self.pose_selected_label}] 所有实例已完成，点击空白处新建", "msg_warning")
+            elif sam_on:
+                self._set_status(f"位姿 [{self.pose_selected_label}] 点击 SAM 预览确认新框，然后依次补点", "msg_warning")
             else:
                 self._set_status(f"位姿 [{self.pose_selected_label}] 所有实例已完成，拖拽新建实例", "msg_warning")
     def on_pose_instance_selected(self, shape):
         for item in self.scene.selectedItems():
             item.setSelected(False)
         shape.setSelected(True)
+        self._update_pose_help_text()
 
     def on_pose_instance_delete(self, shape):
         if shape in self.scene.items():
@@ -2763,7 +2897,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         dir_path = QFileDialog.getExistingDirectory(self, "选择图片目录")
         if not dir_path:
             return
+        if not self._flush_annotation_changes():
+            return
         layout = resolve_open_layout(dir_path)
+        self.current_image_path = None
+        self.actionDeleteImage.setEnabled(False)
         self.current_dir = dir_path
         self._dataset_layout = layout.layout
         self._images_dir = layout.images_dir
@@ -2817,7 +2955,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not directory or not self.class_list:
             return
         class_file = os.path.join(directory, "classes.txt")
-        with open(class_file, "w", encoding="utf-8") as file_handle:
+        with atomic_text_writer(class_file) as file_handle:
             for class_name in self.class_list:
                 file_handle.write(class_name + "\n")
 
@@ -2854,7 +2992,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def on_file_selected(self, current, previous):
         if previous:
-            self._save_annotation_for_path(previous.text())
+            if self._save_annotation_for_path(previous.text()) is False:
+                self.listFiles.blockSignals(True)
+                self.listFiles.setCurrentItem(previous)
+                self.listFiles.blockSignals(False)
+                self._sync_image_nav_slider()
+                return
 
         if current:
             # 切图时中断进行中的 LoRA / RM / Buff，避免旧图回调污染
@@ -2887,10 +3030,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.rm_overlay_timer.stop()
             path = current.text()
             self.current_image_path = path
+            self.actionDeleteImage.setEnabled(True)
             self.scene.load_image(path)
             self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
             self.load_annotations(path)
             self._load_current_mlp_label()
+            self._saved_annotation_state = self._annotation_state()
+            self._annotation_save_failed = False
+            annotation_path = self._anno_map.get(path)
+            self.saveStatusLabel.setText("自动保存：已读取标注" if annotation_path else "自动保存：等待修改")
+            self.saveStatusLabel.setToolTip(
+                annotation_path or self._yolo_label_targets.get(path) or sidecar_json_path(path)
+            )
 
             self.undo_stack.clear()
             self.redo_stack.clear()
@@ -2935,6 +3086,26 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 return ANNO_FORMAT_YOLO, yolo_path
         return ANNO_FORMAT_JSON, json_path
 
+    def _annotation_state(self):
+        # Serialize to a value snapshot: scene coordinates may change in-place.
+        return (self.current_image_path, json.dumps(
+            [Exporter.extract_shapes(self.scene), self._current_mlp_label],
+            ensure_ascii=False, sort_keys=True,
+        ))
+
+    def _flush_annotation_changes(self):
+        """Save remaining edits without marking untouched images as negatives."""
+        if not self.current_image_path or not self.scene.img_item:
+            return True
+        if not self._annotation_save_failed:
+            if self._annotation_state() == self._saved_annotation_state:
+                return True
+            if (self._saved_annotation_state is None
+                    and not Exporter.extract_shapes(self.scene)
+                    and self._current_mlp_label is None):
+                return True
+        return self._save_annotation_for_path(self.current_image_path)
+
     def _save_annotation_for_path(self, image_path):
         """将当前 scene 标注保存到指定图片路径（仅当 path 仍是当前图时落盘）。"""
         if not image_path or not self.scene.img_item:
@@ -2944,19 +3115,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         shapes_data = Exporter.extract_shapes(self.scene)
         img_rect = self.scene.img_item.pixmap().rect()
 
-        # 自动补全 class_list：确保新画的或自动标注出的 label (如 RT/BT) 包含在 self.class_list 中，
-        # 避免在 save_yolo 时因为 label 不在 self.class_list 中而被过滤掉导致 .txt 不写入
-        class_added = False
-        for s in shapes_data:
-            lbl = s.get("label", "").strip()
-            if lbl and lbl not in self.class_list:
-                self.add_class_to_list(lbl)
-                class_added = True
-        if class_added:
-            self.save_classes()
-
-        save_format, out_path = self._resolve_annotation_save_path(image_path)
+        out_path = image_path
         try:
+            # Include every scene label before exporting YOLO class IDs.
+            class_added = False
+            for s in shapes_data:
+                lbl = s.get("label", "").strip()
+                if lbl and lbl not in self.class_list:
+                    self.add_class_to_list(lbl)
+                    class_added = True
+            # Retry metadata writes too if a previous save failed.
+            if class_added or self._annotation_save_failed:
+                self.save_classes()
+            save_format, out_path = self._resolve_annotation_save_path(image_path)
             if save_format == ANNO_FORMAT_YOLO:
                 Exporter.save_yolo(
                     out_path, img_rect.width(), img_rect.height(),
@@ -2969,6 +3140,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 )
         except Exception as error:
             debug_log(f"自动保存失败: {str(error)}")
+            first_failure = not self._annotation_save_failed
+            self._annotation_save_failed = True
+            self.saveStatusLabel.setText("自动保存失败：未保存，请按 Ctrl+S 重试")
+            self.saveStatusLabel.setToolTip(f"{out_path}\n{error}")
+            if first_failure:
+                DialogOver(self, f"标注未保存：{error}。当前画面已保留，请检查目录后按 Ctrl+S 重试。",
+                           "自动保存失败", "danger")
+            return False
+
+        self._annotation_save_failed = False
+        self._saved_annotation_state = self._annotation_state()
+        self.saveStatusLabel.setText("自动保存：已保存")
+        self.saveStatusLabel.setToolTip(out_path)
 
         self._anno_map[image_path] = out_path
         self._anno_format[image_path] = save_format
@@ -2986,10 +3170,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self._update_filter_status()
         self._update_current_label_count()
 
+        return True
+
     def auto_save_annotation(self):
         if not self.current_image_path or not self.scene.img_item:
             return
-        self._save_annotation_for_path(self.current_image_path)
+        return self._save_annotation_for_path(self.current_image_path)
 
     def load_annotations(self, image_path):
         if not self.scene.img_item:
@@ -3018,6 +3204,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if label not in self.class_list:
             self.add_class_to_list(label)
             self.save_classes()
+        if isinstance(shape, PoseShape) and not getattr(shape, "is_hierarchical", False):
+            category = self.pose_config.get_category(label)
+            if category and shape.kpt_count < category["kpt_count"]:
+                # Older saves may have truncated the schema to the number of
+                # placed points. Recover missing slots without replacing the
+                # saved box or any existing point coordinates.
+                shape.set_kpt_names(category["keypoints"])
         self.scene.addItem(shape)
 
     def _load_json(self, json_path):
@@ -3125,7 +3318,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _load_settings(self):
         from core.settings import get_rm_params, get_editor_params
+        from core.settings import Settings
         from core.constants import RM_VERTICAL_ANGLE_THRESHOLD, RM_PARALLEL_THRESHOLD, RM_BAR_LENGTH_MIN_RATIO, RM_SEARCH_RADIUS_RATIO, RM_ROI_PADDING
+        self._app_settings = Settings.app()
+        self.samPromptInput.setText(
+            self._app_settings.get_str("Parameters/SAM_PROMPT", "")
+        )
         self.max_history_steps = get_editor_params()["max_history"]
         rm = get_rm_params()
         RMArmorAuto.VERTICAL_ANGLE_THRESHOLD = rm["vertical_angle"]
@@ -3135,6 +3333,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         RMArmorAuto.ROI_PADDING = rm["roi_padding"]
         from core.mlp_classifier import MLPClassifier
         MLPClassifier.load_roi_params_from_settings()
+
+    def _schedule_sam_prompt_save(self, _text=None):
+        """Debounce prompt persistence while the user is typing."""
+        self._sam_prompt_save_timer.start(250)
+
+    def _save_sam_prompt(self):
+        self._app_settings.set("Parameters/SAM_PROMPT", self.samPromptInput.text())
+        self._app_settings.sync()
 
     def open_settings(self):
         from core.mlp_classifier import MLPClassifier
@@ -3330,7 +3536,47 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self._reload_after_fs_change()
             DialogOver(self, "重命名完成！", "提示", "info")
 
-    def _reload_after_fs_change(self):
+    def delete_current_image(self):
+        image_path = self.current_image_path
+        if not image_path or not self.current_dir:
+            return
+        workers = (getattr(self, name, None) for name in ("_buff_sam3_worker", "_buff_semi_worker"))
+        if (self.sam_loading or self.lora_sam_loading or getattr(self, "_batch_mode", False)
+                or any(worker is not None and worker.isRunning() for worker in workers)
+                or (self.lora_armor_auto and self.lora_armor_auto.is_busy)
+                or (getattr(self, "rm_armor_auto", None) and self.rm_armor_auto._phase != "idle")
+                or (getattr(self, "rm_buff_merge_auto", None) and self.rm_buff_merge_auto.phase != "idle")
+                or self._pose_prompt_request is not None):
+            DialogOver(self, "请等待当前图片分析或自动标注完成后再删除", "删除图片", "warning")
+            return
+        root = self._dataset_root or self.current_dir
+        answer = QMessageBox.question(
+            self, "删除当前图片",
+            f"将当前图片及其对应标注移至回收目录？\n\n{image_path}\n\n"
+            f"回收目录：{os.path.join(root, '.deleted_images')}\n文件可从回收目录找回。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes or image_path != self.current_image_path:
+            return
+        if not self._flush_annotation_changes():
+            return
+        candidates = [self.listFiles.item(i).text() for i in range(self.listFiles.count())
+                      if not self.listFiles.item(i).isHidden()]
+        position = candidates.index(image_path) if image_path in candidates else -1
+        following = candidates[position + 1:] + list(reversed(candidates[:max(position, 0)]))
+        next_path = following[0] if following else None
+        stem = os.path.splitext(image_path)[0]
+        annotations = [stem + extension for extension in (".json", ".txt", ".xml")]
+        annotations.extend([self._anno_map.get(image_path), self._yolo_label_targets.get(image_path)])
+        try:
+            bucket = trash_image(image_path, annotations, root)
+        except (OSError, ValueError) as error:
+            DialogOver(self, f"删除未完成：{error}", "删除图片失败", "danger")
+            return
+        self._reload_after_fs_change(preferred_image=next_path)
+        self._set_status(f"已移走 {os.path.basename(image_path)}，可从 {bucket} 找回", "msg_success")
+
+    def _reload_after_fs_change(self, preferred_image=None):
         """文件系统层面增删/重命名后，重建布局映射、文件列表与筛选缓存。
 
         旧 _anno_map 的键是旧文件名，直接 _compute_label_counts 会让缓存键
@@ -3346,13 +3592,35 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self._yolo_label_targets = dict(layout.yolo_label_targets)
         # 旧路径已失效，置空防止 on_file_selected 把 scene 误存回旧文件名
         self.current_image_path = None
+        self.actionDeleteImage.setEnabled(False)
+        self._pose_prompt_request = None
         self.listFiles.blockSignals(True)
         self.listFiles.clear()
         for image_path in layout.image_paths:
             self.listFiles.addItem(image_path)
         self.listFiles.blockSignals(False)
         if self.listFiles.count() > 0:
-            self.listFiles.setCurrentRow(0)
+            row = layout.image_paths.index(preferred_image) if preferred_image in layout.image_paths else 0
+            self.listFiles.setCurrentRow(row)
+        else:
+            self.scene.cancel_drawing()
+            self.scene.clear_shapes()
+            self.scene.clear_rm_overlays()
+            if self.scene.img_item is not None:
+                self.scene.removeItem(self.scene.img_item)
+                self.scene.img_item = None
+            self.scene.setSceneRect(QRectF())
+            self.scene.h_line.hide()
+            self.scene.v_line.hide()
+            self.samSwitch.setChecked(False)
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._saved_annotation_state = None
+            self._annotation_save_failed = False
+            self._current_mlp_label = None
+            self.saveStatusLabel.setText("自动保存：无图片")
+            self.saveStatusLabel.setToolTip("")
+            self.update_all_instances()
         self._align_class_list_with_yolo_ids()
         self._compute_label_counts()
         self._refresh_filter_class_combo()
@@ -3571,12 +3839,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         elif key == Qt.Key_Y and modifiers == Qt.ControlModifier:
             self.redo()
         elif key == Qt.Key_S and modifiers == Qt.ControlModifier:
-            self.auto_save_annotation()
-            DialogOver(self, "标注已保存", "保存成功", "success")
+            if self.auto_save_annotation():
+                DialogOver(self, "标注已保存", "保存成功", "success")
         else:
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        if not self._flush_annotation_changes():
+            event.ignore()
+            return
+        self._sam_prompt_save_timer.stop()
+        self._save_sam_prompt()
         debug_log("关闭 正在清理资源...")
         # 等待后台 BUFF 标注线程结束，避免 QThread 运行中被析构导致 abort
         for worker_attr in ("_buff_sam3_worker", "_buff_semi_worker"):

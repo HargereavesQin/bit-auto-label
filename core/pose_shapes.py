@@ -98,9 +98,8 @@ class KeypointItem(QGraphicsEllipseItem):
             return QPointF(x, y)
         if change == QGraphicsItem.ItemPositionHasChanged:
             parent = self.parentItem()
-            if parent is not None and getattr(parent, "bbox_hidden", False):
+            if parent is not None and getattr(parent, "bbox_from_keypoints", False):
                 parent.update_bbox_from_keypoints()
-                parent.set_bbox_visible(False)
             scene = self.scene()
             if scene is not None and hasattr(scene, "state_changed"):
                 try:
@@ -129,6 +128,9 @@ class PoseShape(QGraphicsRectItem, BaseShape):
         self._kpt_count = len(self.kpt_names)  # 内部存储，通过属性访问
         self.is_temp = False
         self.bbox_hidden = False
+        # Only instances created without a box derive geometry from points.
+        # Hiding a SAM/manual box must never change its geometry.
+        self.bbox_from_keypoints = False
 
         # 样式
         self.normal_pen = QPen(QColor(255, 165, 0), 2)
