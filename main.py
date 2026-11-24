@@ -1631,7 +1631,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                                 if idx >= 0 and cid < len(self.class_list) and self.class_list[cid] == category_name and is_pose_line:
                                     removed_count += 1
                                 else:
-                                    if idx >= 0 and cid > idx and not is_pose_line:
+                                    # class_id is shared by box and pose rows, so
+                                    # removing a class must shift both formats.
+                                    if idx >= 0 and cid > idx:
                                         cid -= 1
                                     if is_pose_line:
                                         new_lines.append(f"{cid} " + " ".join(parts[1:]) + "\n")
@@ -1648,9 +1650,28 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.scene.removeItem(shape)
 
         # 从配置中移除
+        # Remove it from the class list as well. Otherwise load_classes() reads
+        # it back from classes.txt on the next launch and pose synchronization
+        # recreates the deleted category in pose_classes.json.
+        class_idx = self.class_list.index(category_name) if category_name in self.class_list else -1
+        if class_idx >= 0:
+            self.class_list.pop(class_idx)
+            self.save_classes()
+            self.refresh_class_list_display()
+
         self.pose_config.remove_category(category_name)
         pose_config_path = os.path.join(os.path.dirname(__file__), "config", "pose_classes.json")
         self.pose_config.save(pose_config_path)
+        # Persist the reduced category set to the dataset configuration now.
+        self._sync_pose_config_to_class_list()
+        dataset_roots = []
+        if getattr(self, "_dataset_root", None):
+            dataset_roots.append(self._dataset_root)
+        if self.current_dir and self.current_dir not in dataset_roots:
+            dataset_roots.append(self.current_dir)
+        for root in dataset_roots:
+            if root and os.path.isdir(root):
+                self.pose_config.save(os.path.join(root, "pose_classes.json"))
 
         # 刷新面板
         if self.pose_panel:
